@@ -24,7 +24,7 @@ import aiohttp
 from aiohttp import web
 
 from paths import app_root, backup_root, cache_root, data_root, is_frozen, managed_install, resource_root
-from update_policy import COMPONENTS, allowed_file, safe_relative, version_key
+from update_policy import COMPONENTS, RUNTIME_OF, allowed_file, runtime_target, safe_relative, version_key
 from core_update_review import release_details, installed_files, local_changes
 
 SNOW_FEED = "https://api.github.com/repos/SnowLuma/SnowLuma/releases/latest"
@@ -111,16 +111,24 @@ def unpack(archive: Path, output: Path, component: str, upstream=False, package_
             raise ValueError("Core 程序包格式与文件布局不一致")
         if source_core and any(not name.startswith("components/core/") for name in files):
             raise ValueError("Core 源码包不得混入旧版 EXE 文件")
+        # 运行库独立成组件后，源码包不再自带 runtime/，两者的入口要求因此分开列。
+        runtime_prefix = runtime_target(component)
+        if runtime_prefix:
+            if runtime_prefix + "python.exe" not in files:
+                raise ValueError(f"运行库包缺少 python.exe: {runtime_prefix}python.exe")
+            if any(not name.startswith(runtime_prefix) for name in files):
+                raise ValueError("运行库包不得混入源码或其它组件文件")
+            return files
         source_manager = component == "manager" and any(n.startswith("components/manager/") for n in files)
         required = ["components/manager/source/manager_service.py", "components/manager/source/paths.py",
-                    "components/manager/runtime/python.exe", "components/manager/release.json"] if source_manager else \
+                    "components/manager/release.json"] if source_manager else \
             ["components/core/source/main.py", "components/core/source/ingress_service.py",
                     "components/core/source/paths.py", "components/core/source/config/settings.py",
                     "components/core/source/config/truck_settings.py", "components/core/source/config/role_settings.py",
                     "components/core/source/brain/base/persona/persona_registry.py",
                     "components/core/source/brain/hc/database/default_initializer.py",
                     "components/core/source/web_frontend/dist/index.html",
-                    "components/core/runtime/python.exe", "components/core/release.json"] if source_core else \
+                    "components/core/release.json"] if source_core else \
             [f"{component}.exe"] if component in ("core", "manager", "ingress") else \
             (["index.mjs", "node.exe", "package.json"] if component == "snowluma" else ["AbyssLauncher.exe"])
         if not all(name in files for name in required):
@@ -241,6 +249,13 @@ class Updates:
         receipt = read_json(self.receipt_path(component), {})
         if receipt.get("version"):
             return receipt["version"]
+        # 运行库组件没有独立 release.json（它和源码共用 components/<name>/ 这棵树），
+        # 没装过就报"未安装"，让界面提示先装运行库。
+        if component.endswith("-runtime"):
+            parent = component[: -len("-runtime")]
+            if any((app_root() / p).is_file() for p in (f"components/{parent}/release.json",)):
+                return "旧版一体包"
+            return "未安装"
         if component == "manager" and managed_install():
             return read_json(app_root() / "components/manager/release.json", {}).get("version", "未知")
         source_distribution = read_json(app_root() / "update_defaults.json", {}).get("core_distribution") == "source-v1"
@@ -720,6 +735,14 @@ class Updates:
                 raise ValueError("已有组件正在安装")
             if not managed_install() and name in ("core", "ingress", "manager") and (not is_frozen() or os.getenv("ABYSS_RUN_MODE") == "source"):
                 raise ValueError("当前为源码运行模式；请从正式发布版使用二进制更新")
+            # 运行库必须先于源码就位：旧版一体包含有 runtime，新版源码包不含，
+            # 若先装源码会短暂出现「源码在、运行时没了」的坏状态。
+            runtime_component = RUNTIME_OF.get(name)
+            if runtime_component:
+                runtime_current = self.version(runtime_component)
+                # "旧版一体包"说明 runtime 已随源码装在原位，无需另装。
+                if runtime_current in ("未安装", "未知"):
+                    raise ValueError(f"请先安装 {runtime_component} 运行库，再更新 {name}")
             ready = read_json(self.root / name / "ready.json")
             if not ready:
                 raise ValueError("请先下载或导入更新包")

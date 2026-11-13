@@ -89,6 +89,12 @@ def build(output: Path, private=False, feed_base_url="", package_base_url="", ru
                     shutil.copy2(path, output / "packages" / path.name)
         for name in ("core", "manager", "launcher"):
             package(name, versions[name], app, output / "packages", package_base_url, metadata=metadata if name == "core" else None)
+        # 运行库独立发版（2026-11-13）：源码包已不含 runtime/，这里单独产出两个运行库包。
+        # 版本取 component_versions.json 里的 <name>-runtime，缺省回落到对应源码版本。
+        for parent in ("core", "manager"):
+            runtime_component = f"{parent}-runtime"
+            runtime_version = versions.get(runtime_component) or versions[parent]
+            package(runtime_component, runtime_version, app, output / "packages", package_base_url)
         (output / "download").mkdir()
         shutil.copy2(app / "AbyssLauncher.exe", output / "download/AbyssLauncher.exe")
     summary = {"app": str(app), "versions": versions, "private": private, "packaged_business_executables": ["AbyssLauncher.exe"]}

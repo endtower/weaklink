@@ -41,11 +41,25 @@ def file_hash(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def component_roots(root: Path, component: str) -> list[Path]:
+    """该组件在磁盘上的实际目录（组件名与路径已解耦）。
+
+    core-runtime 装进 components/core/runtime，而不是 components/core-runtime；
+    这样 python.exe 路径不变，_pth 与启动脚本都不必跟着改。
+    """
+    from update_policy import runtime_target
+
+    prefix = runtime_target(component)
+    if prefix:
+        return [root / prefix.rstrip("/")]
+    return [root / f"{component}_internal", root / "components" / component]
+
+
 def installed_files(root: Path, component: str = "core") -> dict[str, str]:
-    """仅读取 Core 拥有的程序，不扫描数据库、聊天、个人配置。"""
+    """仅读取该组件拥有的程序，不扫描数据库、聊天、个人配置。"""
     files = {}
     candidates = [root / f"{component}.exe"]
-    for directory in (root / f"{component}_internal", root / "components" / component):
+    for directory in component_roots(root, component):
         if directory.is_symlink() or directory.is_junction():
             raise ValueError("程序目录包含链接，拒绝检查或覆盖")
         if directory.is_dir():
@@ -68,7 +82,13 @@ def installed_files(root: Path, component: str = "core") -> dict[str, str]:
 def local_changes(receipt: dict, actual: dict[str, str], target: Path, component: str = "core") -> list[str]:
     baseline = receipt.get("files", {})
     if not baseline or receipt.get("target_root") != str(target.resolve()):
-        return ["源码组件缺少官方安装基线，默认保留现有源码"] if any(p.startswith(f"components/{component}/source/") for p in actual) else []
+        from update_policy import runtime_target
+
+        prefix = runtime_target(component) or f"components/{component}/"
+        # 只有源码类组件存在"本地改过程序"的说法；运行库没有基线时按全量覆盖处理。
+        if component.endswith("-runtime"):
+            return []
+        return ["源码组件缺少官方安装基线，默认保留现有源码"] if any(p.startswith(prefix + "source/") for p in actual) else []
     changed = [name for name, digest in baseline.items()
                if allowed_file(component, name) and actual.get(name) != digest]
     changed.extend(name for name in actual if name not in baseline)

@@ -4,10 +4,33 @@ from __future__ import annotations
 import re
 from pathlib import PurePosixPath
 
-COMPONENTS = ("core", "snowluma", "ingress", "manager", "launcher")
+COMPONENTS = ("core", "snowluma", "ingress", "manager", "launcher", "core-runtime", "manager-runtime")
 LOCALES = {"cs", "de", "es", "fr", "it", "ja", "ko", "pl", "pt-BR", "ru", "tr", "zh-Hans", "zh-Hant"}
+
+# 运行库独立成组件（2026-11-13）：此前 core/manager 的包各自带上整套 Python
+# 运行时（core 142MB/4806 文件、manager 109MB/3808 文件），改几行源码也要把
+# 运行库整个重写一遍。现在把 runtime 拆出来单独发版，日常更新只动几 MB 源码。
+#
+# 组件名与安装路径解耦：`core-runtime` 装进 `components/core/runtime`，
+# 与 `core` 同一棵树，所以 python.exe 路径、._pth、启动脚本全都不用改。
+RUNTIME_COMPONENTS = {
+    "core-runtime": "components/core/runtime/",
+    "manager-runtime": "components/manager/runtime/",
+}
+# 组件 -> 它依赖的运行库组件（安装/更新时必须先就位）
+RUNTIME_OF = {"core": "core-runtime", "manager": "manager-runtime"}
+
+# 源码组件（不含运行库）——发布、更新、版本展示都以这组为准。
+SOURCE_COMPONENTS = ("core", "manager", "ingress", "snowluma", "launcher")
+
 CORE_SOURCE = "components/core/source/"
 CORE_RUNTIME = "components/core/runtime/"
+MANAGER_RUNTIME = "components/manager/runtime/"
+
+
+def runtime_target(component: str) -> str:
+    """该组件对应运行库的安装前缀（相对 app/）；没有独立运行库则空串。"""
+    return RUNTIME_COMPONENTS.get(component, "")
 
 
 def core_source_file(name: str) -> bool:
@@ -44,12 +67,18 @@ def safe_relative(name: str) -> str:
 def allowed_file(component: str, name: str) -> bool:
     name = safe_relative(name)
     parts = name.split("/")
+    # 运行库组件：只认自己那棵 runtime/ 子树，且必须有实际内容（禁止空目录条目）。
+    prefix = RUNTIME_COMPONENTS.get(component)
+    if prefix is not None:
+        return (name.startswith(prefix) and len(parts) > 3
+                and not any(p in ("__pycache__", ".git") for p in parts))
     if component == "manager" and name.startswith("components/manager/"):
+        # manager 与 core 共用同一套源码白名单（只换前缀）；runtime 已归 manager-runtime，
+        # 不再从 core 白名单继承，避免两个组件写到同一批文件。
         return allowed_file("core", "components/core/" + name[len("components/manager/"):])
     if component == "core" and name.startswith("components/core/"):
-        return (name == "components/core/release.json" or core_source_file(name)
-                or (name.startswith(CORE_RUNTIME) and len(parts) > 3
-                    and not any(p in ("__pycache__", ".git") for p in parts)))
+        # 不再包含 CORE_RUNTIME：运行库归 core-runtime 组件。
+        return name == "components/core/release.json" or core_source_file(name)
     if component in ("core", "manager", "ingress"):
         return name == f"{component}.exe" or (len(parts) > 1 and parts[0] == f"{component}_internal")
     if component == "snowluma":

@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from update_policy import COMPONENTS, allowed_file, version_key
+from update_policy import COMPONENTS, allowed_file, runtime_target, version_key
 from core_update_review import release_details
 from workspace_layout import BUILDS
 
@@ -34,6 +34,7 @@ def package(component: str, version: str, source: Path, output: Path, base_url="
         if internal_data.get("version") != version or details["format"] != "source-v1":
             raise ValueError("Core source package metadata does not match its release")
     required = "components/manager/source/manager_service.py" if component == "manager" and (source / "components/manager/release.json").is_file() else \
+        runtime_target(component) + "python.exe" if runtime_target(component) else \
         "components/core/source/main.py" if details.get("format") == "source-v1" else \
         f"{component}.exe" if component in ("core", "manager", "ingress") else \
         ("index.mjs" if component == "snowluma" else "AbyssLauncher.exe")
