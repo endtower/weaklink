@@ -23,6 +23,7 @@ import type {
 } from '../types'
 import { chat } from '../stores/chat'
 import MemoryFields from './MemoryFields.vue'
+import PersonaEmotionPanel, { type EmotionPreset, type EmotionStyle } from './PersonaEmotionPanel.vue'
 import MaintenanceStatus from './MaintenanceStatus.vue'
 import MaintenanceRequests from './MaintenanceRequests.vue'
 import { memoryRequest } from '../api/memory'
@@ -463,10 +464,20 @@ const canDeleteRecord = computed(() => {
 const personaCreateOpen = ref(false)
 const personaCreating = ref(false)
 const personaCreateError = ref('')
-const personaForm = ref({ persona_name: '', scene: '', kernel_prompt: '' })
+const defaultEmotionStyle = (): EmotionStyle => ({ preset: 'v4', overrides: { da: {}, ne: {} } })
+const emotionPresets = ref<EmotionPreset[]>([])
+const newPersonaForm = () => ({ persona_name: '', scene: '', kernel_prompt: '', emotion_style: defaultEmotionStyle() })
+const personaForm = ref(newPersonaForm())
+
+// 情绪词现在直接长在人格详情页里（PersonaEmotionPanel），不再是「弹窗里再弹一个弹窗」：
+// 它就是这个人格的一部分，跟适配场景、人格正文并列看，改完在同一页保存。
+function onEmotionSaved(persona: Record<string, any>) {
+  personaItems.value = personaItems.value.map(old => old.persona_name === persona.persona_name ? persona : old)
+  ElMessage.success('情绪词已保存，下一段会话生效')
+}
 
 function openPersonaCreate() {
-  personaForm.value = { persona_name: '', scene: '', kernel_prompt: '' }
+  personaForm.value = newPersonaForm()
   personaCreateError.value = ''
   personaCreateOpen.value = true
 }
@@ -520,7 +531,9 @@ async function createPersona() {
   personaCreating.value = true
   personaCreateError.value = ''
   try {
-    const { persona } = await memoryRequest('/memory/personas', 'POST', personaForm.value)
+    const { emotion_style, ...fields } = personaForm.value
+    const { persona } = await memoryRequest('/memory/personas', 'POST',
+      emotionPresets.value.length ? { ...fields, emotion_style } : fields)
     personaCreateOpen.value = false
     if (activeView.value === 'personas') {
       searchKeyword.value = ''
@@ -578,7 +591,10 @@ async function loadRecords() {
     const data = await memoryRequest(path)
     if (version !== recordVersion || view !== activeView.value) return
     if (view === 'kits') kitItems.value = data.kits
-    else if (view === 'personas') personaItems.value = data.personas
+    else if (view === 'personas') {
+      personaItems.value = data.personas
+      emotionPresets.value = data.emotion_presets ?? []
+    }
     else { observationItems.value = data.observations; observationTotal.value = data.total ?? data.observations.length }
   } catch (err: any) { if (version === recordVersion) recordError.value = err.message || String(err) }
   finally { if (version === recordVersion) recordLoading.value = false }
@@ -1195,6 +1211,13 @@ function colorFor(n: SocialNode): string {
                 <dt v-if="selectedRecord.raw.updated_at">更新时间</dt><dd v-if="selectedRecord.raw.updated_at">{{ timeShort(selectedRecord.raw.updated_at) }}</dd>
                 <template v-if="activeView === 'observations'"><dt>来源</dt><dd>{{ selectedRecord.raw.source === 'human' ? '人工记录' : selectedRecord.raw.source === 'reflection' ? '反思记录' : '历史记录' }}</dd><template v-if="selectedRecord.raw.similarity != null"><dt>相似度</dt><dd>{{ selectedRecord.raw.similarity.toFixed(3) }}</dd></template></template>
               </dl>
+              <!-- 情绪词：和人格同一页展开，不再是弹窗套弹窗 -->
+              <PersonaEmotionPanel
+                v-if="activeView === 'personas' && !selectedRecord.raw.user_only && emotionPresets.length"
+                :persona-id="selectedRecord.id" :presets="emotionPresets"
+                :style-config="selectedRecord.raw.emotion_style ?? defaultEmotionStyle()"
+                @saved="onEmotionSaved"
+              />
               <div v-if="activeView === 'kits'" class="memory-match-controls">
                 <el-input v-model="dilemmaQuery" size="small" aria-label="当前困境" placeholder="描述当前困境，查找相关见闻" @keyup.enter="findObservations" />
                 <div class="kv-edit-actions"><el-button size="small" :loading="matching" @click="findObservations">查找见闻</el-button><el-button v-if="matchedObservations !== null" size="small" @click="activeView = 'observations'; loadRecords()">查看匹配见闻（{{ matchedObservations.length }}）</el-button></div>
@@ -1221,6 +1244,11 @@ function colorFor(n: SocialNode): string {
       <el-form-item label="人格正文">
         <el-input v-model="personaForm.kernel_prompt" type="textarea" :autosize="{ minRows: 5, maxRows: 12 }" placeholder="写下这个人格的立场、思考方式和表达风格" />
       </el-form-item>
+      <el-form-item v-if="emotionPresets.length" label="情绪预设">
+        <el-select v-model="personaForm.emotion_style.preset">
+          <el-option v-for="preset in emotionPresets" :key="preset.id" :label="preset.label" :value="preset.id" />
+        </el-select>
+      </el-form-item>
       <p v-if="personaCreateError" class="kv-edit-error" role="alert">{{ personaCreateError }}</p>
       <div class="kv-edit-actions">
         <el-button type="primary" native-type="submit" :loading="personaCreating">创建</el-button>
@@ -1228,7 +1256,6 @@ function colorFor(n: SocialNode): string {
       </div>
     </el-form>
   </AppDialog>
-
 </template>
 
 <style scoped>
