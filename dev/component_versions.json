@@ -1,6 +1,6 @@
 {
-    "launcher": "0.9.4",
-    "manager": "0.11.2",
-    "core": "0.4.15",
+    "launcher": "0.9.5",
+    "manager": "0.11.3",
+    "core": "0.4.16",
     "ingress": "0.1.0"
 }

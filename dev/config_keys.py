@@ -1,9 +1,32 @@
-"""管理服务与配置读取器共用的环境覆盖键；不导入业务配置。"""
+"""管理服务与 Core 共用的部署配置键、默认值和接入点标签。"""
+
+from urllib.parse import urlparse
 
 DEFAULT_COMMON_URL = "https://ark.cn-beijing.volces.com/api/plan/v3"
 DEFAULT_COMMON_MODEL = "DeepSeek-V4.1-Flash"
 DEFAULT_EMBEDDING_MODEL = "doubao-embedding-vision"
 DEFAULT_ONEBOT_ENABLED = True
+
+PROVIDER_LABELS = {
+    "ark.cn-beijing.volces.com": "火山方舟",
+    "amr-link.open-design.ai": "open-design中转",
+    "opencode.ai": "opencode",
+    "api.commandcode.ai": "commandcode",
+    "open.bigmodel.cn": "智谱GLM",
+    "croissant.521911.xyz": "croissant",
+    "api.deepseek.com": "DeepSeek官方",
+}
+
+
+def resolve_provider_label(base_url: str) -> str:
+    """把接入点归类为提供商标签，未知接入点显示其主机名。"""
+    url = (base_url or "").strip()
+    for host, label in PROVIDER_LABELS.items():
+        if host in url:
+            return label
+    if not url:
+        return "未知接入点"
+    return urlparse(url).hostname or url
 
 CONFIG_OVERRIDE_KEYS = (
     "MASTER_ID", "MASTER_NAME", "ASSISTANT_QQ", "ASSISTANT_NAME", "ASSISTANT_NICK_NAME",

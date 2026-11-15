@@ -21,7 +21,10 @@
 """
 
 from config.env_tools import env_str
-from config_keys import DEFAULT_COMMON_MODEL, DEFAULT_COMMON_URL, DEFAULT_EMBEDDING_MODEL
+from config_keys import (
+    DEFAULT_COMMON_MODEL, DEFAULT_COMMON_URL, DEFAULT_EMBEDDING_MODEL,
+    PROVIDER_LABELS, resolve_provider_label,
+)
 
 
 # ==================================================
@@ -140,30 +143,3 @@ class VisionConfig:
 
 llm_config = LLMConfig()
 vision_config = VisionConfig()
-
-
-# ==================================================
-# API 提供商（家）标签 —— token 统计按接入点归集的唯一映射
-# ==================================================
-# key 为接入点 host 子串，value 为展示用提供商名；新增接入点只需在此追加一行。
-PROVIDER_LABELS = {
-    "ark.cn-beijing.volces.com": "火山方舟",
-    "amr-link.open-design.ai": "open-design中转",
-    "opencode.ai": "opencode",
-    "api.commandcode.ai": "commandcode",
-    "open.bigmodel.cn": "智谱GLM",
-    "croissant.521911.xyz": "croissant",
-    "api.deepseek.com": "DeepSeek官方",
-}
-
-
-def resolve_provider_label(base_url: str) -> str:
-    """把接入点 base_url 归类为提供商标签（未知 host 回退为 host 本身）。"""
-    url = (base_url or "").strip()
-    for host, label in PROVIDER_LABELS.items():
-        if host in url:
-            return label
-    if not url:
-        return "未知接入点"
-    from urllib.parse import urlparse
-    return urlparse(url).hostname or url
