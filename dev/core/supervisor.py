@@ -17,7 +17,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from paths import app_root, data_root, external_root, is_frozen, log_root, managed_install
+from paths import app_root, data_root, effective_data_env, external_root, is_frozen, log_root, managed_install
 
 PROJECT_ROOT = app_root()
 LOG_DIR = log_root() / "manager"
@@ -116,9 +116,8 @@ def snowluma_webui_port() -> int:
 
 def core_ports() -> tuple[int, int]:
     """Core 的 (web, onebot) 端口——走 .env.dev 覆盖层，与真实启动一致。"""
-    from dotenv import dotenv_values
-    env = dotenv_values(data_root() / ".env.dev")
-    ports = tuple(int(os.environ.get(key) or env.get(key) or default)
+    env = effective_data_env()
+    ports = tuple(int(env.get(key) or default)
                   for key, default in (("WEB_WS_PORT", 5002), ("ONEBOT_WS_PORT", 5001)))
     if any(not 1 <= port <= 65535 for port in ports):
         raise ValueError("Core 端口必须在 1–65535 范围内")
@@ -194,10 +193,7 @@ TUNNEL_NAME = "tunnel"
 
 def bridge_env() -> dict:
     """读 .env.dev 的桥接相关键；环境变量优先，与 ingress_config 的取值顺序一致。"""
-    from dotenv import dotenv_values
-    values = dict(dotenv_values(data_root() / ".env.dev"))
-    values.update(os.environ)
-    return values
+    return effective_data_env()
 
 
 def bridge_local_target(base_url: str, default_port: int = 18770) -> tuple[str, int]:
@@ -339,7 +335,7 @@ def spawn(spec: ProcSpec, detached: bool = False, clean_env: bool = False) -> su
         # 但 app_*.log 总日志只允许一个进程写——Windows 下轮转需要 rename，
         # 两个进程同写同一文件会导致轮转失败。故 ingress 一律关闭总日志，
         # 其日志由 manager/ingress.out.log 承载。
-        # ingress_service.py 不加载 .env.dev，只能由父进程在此注入。
+        # 父进程在子进程加载配置前关闭接入进程的总日志。
         if spec.name == "ingress":
             env["LOG_GLOBAL_FILE"] = "0"
     try:

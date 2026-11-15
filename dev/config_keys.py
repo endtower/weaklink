@@ -1,5 +1,10 @@
 """管理服务与配置读取器共用的环境覆盖键；不导入业务配置。"""
 
+DEFAULT_COMMON_URL = "https://ark.cn-beijing.volces.com/api/plan/v3"
+DEFAULT_COMMON_MODEL = "DeepSeek-V4.1-Flash"
+DEFAULT_EMBEDDING_MODEL = "doubao-embedding-vision"
+DEFAULT_ONEBOT_ENABLED = True
+
 CONFIG_OVERRIDE_KEYS = (
     "MASTER_ID", "MASTER_NAME", "ASSISTANT_QQ", "ASSISTANT_NAME", "ASSISTANT_NICK_NAME",
     "WEB_ENABLED", "WEB_WS_HOST", "WEB_WS_PORT", "WEB_WS_PATH", "WEB_ACCESS_TOKEN",

@@ -23,7 +23,6 @@ import uvicorn
 from pathlib import Path
 from fastapi import FastAPI
 from typing import Dict, Any, AsyncIterator
-from dotenv import load_dotenv
 
 # 受管源码使用 Python 子进程，输出必须与管理服务读取日志的 UTF-8 约定一致。
 for _stream in (sys.stdout, sys.stderr):
@@ -35,16 +34,15 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
-from paths import app_root, data_root, log_root, ensure_cwd
+from paths import app_root, load_data_env, log_root, ensure_cwd
 
-# 项目根：源码运行 = 仓库根；冻结运行 = exe 所在目录（.env.dev 与用户数据都在这）
+# 程序根用于导入代码，工作目录与配置由数据根单独决定。
 project_root = app_root()
 ensure_cwd()
 sys.path.insert(0, str(project_root))
 
 # 配置外置入口（.env.dev 不存在时静默跳过；见 config/ 下的读取方）
-_env_file = data_root() / ".env.dev"
-load_dotenv(_env_file if _env_file.is_file() else project_root / ".env.dev")
+load_data_env()
 
 # 冻结（--noconsole）模式下 stdout/stderr 是无效句柄，重定向到文件保住启动输出
 # 注意必须是文本模式：logging/uvicorn 写的是 str，二进制句柄会 TypeError

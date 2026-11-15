@@ -1,0 +1,8 @@
+{
+  "format": "source-v1",
+  "notes": "普通操作故障会停止当前事件链。消息库写入使用独立事务，部署配置跟随当前数据目录。管理服务现在有自己的精简源码和运行依赖，安装 Core 前仍可打开管理页。",
+  "breaking_changes": ["Web 测试预设已迁到独立的开发命令，正式 WebSocket 不再提供切换测试库的指令。"],
+  "data_policy": "compatible",
+  "migration_notes": "无需迁移数据库，更新沿用当前数据目录。开发用 JSON 预设可传给 scripts/run_preset_sandbox.py。",
+  "requires": {"manager": "0.11.0", "launcher": "0.8.0"}
+}

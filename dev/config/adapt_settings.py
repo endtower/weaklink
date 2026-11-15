@@ -12,6 +12,7 @@
 """
 
 from config.env_tools import env_bool, env_int, env_opt, env_str
+from config_keys import DEFAULT_ONEBOT_ENABLED
 
 
 
@@ -22,7 +23,7 @@ class OneBotConfig:
     """OneBot v11 平台配置 - 适配 NapCat / go-cqhttp / Lagrange 等实现"""
 
     # ===================== 开关 =====================
-    ENABLED = env_bool("ONEBOT_ENABLED", True)  # 是否启用 OneBot 平台
+    ENABLED = env_bool("ONEBOT_ENABLED", DEFAULT_ONEBOT_ENABLED)
 
     # ===================== 反向 WebSocket 服务端（Core 起在 host:port，SnowLuma/NapCat 来连）=====================
     WS_HOST = env_str("ONEBOT_WS_HOST", "127.0.0.1")      # 监听地址（0.0.0.0 = 接受所有网卡）

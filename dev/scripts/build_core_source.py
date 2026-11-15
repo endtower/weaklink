@@ -52,7 +52,7 @@ class DefaultInitializer:
 '''
 
 
-def copy_sources(destination: Path, private: bool = False):
+def copy_python_sources(destination: Path, private: bool = False):
     names = [p for directory in ("brain", "adapt", "core", "utils", "memory", "config")
              for p in (ROOT / directory).rglob("*.py") if "tests" not in p.relative_to(ROOT).parts]
     names += [ROOT / name for name in ("main.py", "ingress_service.py", "ingress_config.py", "paths.py",
@@ -86,6 +86,10 @@ def copy_sources(destination: Path, private: bool = False):
         target = destination / path.relative_to(ROOT / "release_defaults")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
+
+
+def copy_sources(destination: Path, private: bool = False):
+    copy_python_sources(destination, private=private)
     frontend = ROOT / "web_frontend/dist"
     if not (frontend / "index.html").is_file():
         raise ValueError("请先构建 Web UI；源码 Core 必须携带与后端匹配的前端")
@@ -129,7 +133,7 @@ def _copy_package_without_record(dist, site: Path, name: str) -> None:
     print(f"依赖 {name} 缺少 RECORD，已按包目录整体复制: {source}", flush=True)
 
 
-def copy_runtime(destination: Path, reuse_standard_library=False):
+def copy_runtime(destination: Path, reuse_standard_library=False, *, requirements_path=None):
     """使用本次构建解释器及已安装依赖；把解析到的准确版本写入锁文件。"""
     from pip._vendor.packaging.requirements import Requirement
     from pip._vendor.packaging.markers import default_environment
@@ -145,7 +149,8 @@ def copy_runtime(destination: Path, reuse_standard_library=False):
             shutil.copytree(base / directory, destination / directory,
                             ignore=shutil.ignore_patterns("site-packages", "__pycache__", "test", "tests", "idlelib", "tkinter", "turtledemo", "ensurepip"))
     environment = default_environment() | {"extra": ""}
-    pending = [Requirement(line.split("#", 1)[0].strip()) for line in (ROOT / "requirements.txt").read_text(encoding="utf-8-sig").splitlines()
+    requirements = requirements_path or ROOT / "requirements.txt"
+    pending = [Requirement(line.split("#", 1)[0].strip()) for line in requirements.read_text(encoding="utf-8-sig").splitlines()
                if line.strip() and not line.lstrip().startswith("#") and not line.lower().startswith("pyinstaller")]
     found = {}
     site = destination / "Lib/site-packages"

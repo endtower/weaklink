@@ -4,7 +4,10 @@ import traceback
 from typing import Dict
 from utils.logger import get_logger
 from utils.error_handling import async_handle_errors
-from utils.chain_context import generate_chain_id, set_chain_context, reset_chain_context
+from utils.chain_context import (
+    CHAIN_OPERATION_ERRORS, abort_current_chain, ensure_chain_active,
+    generate_chain_id, set_chain_context, reset_chain_context,
+)
 from config.truck_settings import is_truck_enabled
 from .trucks.private_truck import PrivateTruck
 from .trucks.at_mention_truck import AtMentionTruck
@@ -147,6 +150,7 @@ class AttentionStation:
             try:
                 # 请求truck生成完整消息
                 truck_messages = await truck.get_truck_messages()
+                ensure_chain_active()
 
                 # 如果有消息返回，将其发布给下级att模块
                 if truck_messages:
@@ -178,6 +182,7 @@ class AttentionStation:
                         session_id_for_pfca,
                         name_for_pfca,
                     )
+                    ensure_chain_active()
 
                     # 结束事件链
                     focus_state.end_event_chain()
@@ -196,8 +201,11 @@ class AttentionStation:
                 # skip 分支也可能写入了 proactive 上下文，统一在链尾归档清空，
                 # 保证 active 文件不残留跨链内容（前端进行中视图因此准确）。
                 _force_archive_chain_contexts()
+            except CHAIN_OPERATION_ERRORS as exc:
+                abort_current_chain()
+                logger.warning("事件链 %s 已停止（%s）: %s", chain_id, truck_id, exc)
+                _force_archive_chain_contexts()
             except Exception as e:
-                # 硬约定#4：运行期业务错误默认 fatal（os._exit(1)）。
                 # 任何未预期异常（含非 AbyssCoreError）都不能让 _process_tasks
                 # 后台任务静默死亡——否则 station 处理循环永久停摆，truck 与
                 # PFCA 全部失声且看似"正常"（致命静默，见本轮修复）。
@@ -211,6 +219,9 @@ class AttentionStation:
                     except Exception:
                         pass
                 os._exit(1)
+            except asyncio.CancelledError:
+                abort_current_chain()
+                raise
             finally:
                 try:
                     # CancelledError 不经过上面的 Exception 分支，仍必须关链撤权。

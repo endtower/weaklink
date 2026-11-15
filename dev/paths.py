@@ -83,7 +83,7 @@ def resource_root() -> Path:
     """只读打包资源根（随分发的静态资源）。
 
     冻结运行 = PyInstaller 解包目录（core_internal）；源码运行 = 仓库根。
-    用于定位"随包收集、运行期不写"的资源（如 component_versions.json、旧版兼容 env）。
+    用于定位随包收集的只读资源，例如 component_versions.json。
     """
     if is_frozen():
         return Path(getattr(sys, "_MEIPASS", app_root()))
@@ -133,6 +133,30 @@ def data_root() -> Path:
 def log_root() -> Path:
     """日志根：data_root()/logs。日志生产（utils.logger）与网页读取（/system/logs）共用。"""
     return data_root() / "logs"
+
+
+def data_env_path() -> Path:
+    return data_root() / ".env.dev"
+
+
+def load_data_env() -> None:
+    """Load the selected profile without replacing existing process variables."""
+    from dotenv import load_dotenv
+
+    load_dotenv(data_env_path())
+
+
+def read_data_env() -> dict[str, str | None]:
+    """Read the current profile without changing the process environment."""
+    from dotenv.main import DotEnv
+
+    # Match load_dotenv's expansion of ${VAR} when both sources define VAR.
+    return dict(DotEnv(data_env_path(), override=False, encoding="utf-8").dict())
+
+
+def effective_data_env() -> dict[str, str | None]:
+    """Read deployment settings with the same precedence as load_data_env."""
+    return {**read_data_env(), **os.environ}
 
 
 def ensure_cwd() -> None:

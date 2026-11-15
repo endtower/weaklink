@@ -32,32 +32,30 @@ docs/api/onebot_api.md；web 子包接口见 docs/api/web_api.md。
 修改对外接口后必须同步更新对应文档（校验：python scripts/check_api_docs.py）。
 """
 
-from .protocol import (
-    Platform,
-    SessionScope,
-    MessageSegment,
-    NormalizedEvent,
-    OutboundTarget,
-    OutboundPayload,
-    Channel,
-)
-from .router import OutboundRouter, get_outbound_router
-from .manager import ChannelManager, get_channel_manager, reset_channel_manager
+from importlib import import_module
 
-__all__ = [
-    # 基础类型
-    "Platform",
-    "SessionScope",
-    "MessageSegment",
-    "NormalizedEvent",
-    "OutboundTarget",
-    "OutboundPayload",
-    # 协议
-    "Channel",
-    # 单例
-    "OutboundRouter",
-    "get_outbound_router",
-    "ChannelManager",
-    "get_channel_manager",
-    "reset_channel_manager",
-]
+_EXPORTS = {
+    "Platform": ".protocol",
+    "SessionScope": ".protocol",
+    "MessageSegment": ".protocol",
+    "NormalizedEvent": ".protocol",
+    "OutboundTarget": ".protocol",
+    "OutboundPayload": ".protocol",
+    "Channel": ".protocol",
+    "OutboundRouter": ".router",
+    "get_outbound_router": ".router",
+    "ChannelManager": ".manager",
+    "get_channel_manager": ".manager",
+    "reset_channel_manager": ".manager",
+}
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str):
+    """Load Core exports on demand so Manager can import the bridge contract alone."""
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module, __name__), name)
+    globals()[name] = value
+    return value

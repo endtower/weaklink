@@ -21,10 +21,7 @@
 """
 
 from config.env_tools import env_str
-
-DEFAULT_COMMON_URL = "https://ark.cn-beijing.volces.com/api/plan/v3"
-DEFAULT_COMMON_MODEL = "DeepSeek-V4.1-Flash"
-DEFAULT_EMBEDDING_MODEL = "doubao-embedding-vision"
+from config_keys import DEFAULT_COMMON_MODEL, DEFAULT_COMMON_URL, DEFAULT_EMBEDDING_MODEL
 
 
 # ==================================================

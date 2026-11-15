@@ -1,79 +1,113 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""验收（GPT 审查-1）：空库 + 并发首访，只初始化一次，所有调用者等到就绪。
-
-对应 docs/启动管理程序_架构审查与交接建议_2026-10-02.md 的验收场景：
-"全新空数据目录，多协程同时首次访问，只进行一次完整初始化，所有调用者都等到就绪"。
-
-运行：python tests/acceptance_db_race.py
-"""
-
+"""Exercise SQLite repository ownership and concurrent writes with temporary databases."""
 import asyncio
+import os
 import sys
 import tempfile
+import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from workspace_layout import test_root
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+with patch.dict(os.environ, {"ABYSS_DATA_DIR": str(test_root()), "LOG_GLOBAL_FILE": "0"}):
+    from memory.message_repository import MessageRepository
+    from utils.error_handling import StorageError, ValidationError
 
-from memory.message_repository import MessageRepository  # noqa: E402
-from utils.error_handling import StorageError  # noqa: E402
+
+def message(session_id, platform=None):
+    session = {"session_id": session_id}
+    if platform:
+        session.update(platform=platform, connection_id=platform, remote_session_id=session_id)
+    return {
+        "session_info": session,
+        "message_list": [{"message_id": "1", "timestamp": 1, "content_text": "fixture"}],
+    }
 
 
-async def main() -> int:
-    tmp = tempfile.mkdtemp(prefix="abyss_race_")
-    repo = MessageRepository(storage_path=tmp)
+class MessageRepositoryTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=test_root())
+        self.addCleanup(self.temp.cleanup)
+        self.repo = MessageRepository(self.temp.name)
+        self.addAsyncCleanup(self.repo.close)
 
-    # 计数器：建表函数被真实执行的次数（放大竞态窗口的 50ms 延迟）
-    counter = {"create": 0}
-    original = repo._create_tables
+    async def test_concurrent_initialization(self):
+        original = self.repo._create_tables
+        initializations = 0
 
-    async def counted_create(conn):
-        counter["create"] += 1
-        await asyncio.sleep(0.05)
-        await original(conn)
+        async def create(conn):
+            nonlocal initializations
+            initializations += 1
+            await asyncio.sleep(0)
+            await original(conn)
 
-    repo._create_tables = counted_create
+        with patch.object(self.repo, "_create_tables", side_effect=create):
+            await asyncio.gather(*(self.repo.list_sessions() for _ in range(8)),
+                                 self.repo.ensure_ready(), self.repo.ensure_ready())
+        self.assertEqual(initializations, 1)
+        await self.repo.close()
+        with self.assertRaises(StorageError):
+            await self.repo.list_sessions()
 
-    # 10 个并发调用者同时首次访问（8 个查询 + 2 个就绪钩子）
-    tasks = [repo.list_sessions() for _ in range(8)]
-    tasks += [repo.ensure_ready(), repo.ensure_ready()]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    async def test_failed_write_is_invisible_and_cannot_be_committed_by_another_save(self):
+        partial_write = asyncio.Event()
+        release = asyncio.Event()
+        original = self.repo._insert_messages
 
-    errors = [r for r in results if isinstance(r, BaseException)]
-    if errors:
-        print(f"✗ {len(errors)} 个并发调用者失败: {errors[:2]}")
-        return 1
-    if counter["create"] != 1:
-        print(f"✗ 建表执行了 {counter['create']} 次（应恰好 1 次）——初始化竞态未修复")
-        return 1
+        async def insert(conn, session_id, messages):
+            if session_id == "private_100":
+                partial_write.set()
+                await release.wait()
+                raise ValidationError("fixture write fails after inserting the session")
+            return await original(conn, session_id, messages)
 
-    print(f"✓ 10 个并发调用全部成功；建表恰好执行 1 次")
+        with patch.object(self.repo, "_insert_messages", side_effect=insert):
+            saves = [asyncio.create_task(self.repo.store_message(message("private_100")))]
+            try:
+                await asyncio.wait_for(partial_write.wait(), 5)
+                successful = asyncio.create_task(self.repo.store_message(message("private_200")))
+                saves.append(successful)
+                self.assertFalse(await self.repo.session_exists("private_100"))
+                self.assertFalse(successful.done())
+            finally:
+                release.set()
+                results = await asyncio.gather(*saves, return_exceptions=True)
+        self.assertIsInstance(results[0], ValidationError)
+        self.assertEqual(results[1]["status"], "success")
+        self.assertFalse(await self.repo.session_exists("private_100"))
+        self.assertTrue(await self.repo.session_exists("private_200"))
 
-    # 事后库内确认
-    import sqlite3
-    conn = sqlite3.connect(str(Path(tmp) / "chat_history.db"))
-    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master").fetchall()]
-    conn.close()
-    if not {"sessions", "messages", "cursors"} <= set(tables):
-        print(f"✗ 表结构缺失: {tables}")
-        return 1
-    print(f"✓ 库内表结构完整: {sorted(tables)}")
+    async def test_cancelled_write_rolls_back_before_switching_database(self):
+        partial_write = asyncio.Event()
 
-    await repo.close()
+        async def insert(conn, session_id, messages):
+            partial_write.set()
+            await asyncio.Future()
 
-    # 关闭后再访问必须拒绝（而不是挂死或静默重建）。
-    # 注意走未装饰的 _ensure_connection：list_sessions 的装饰器会把
-    # StorageError 当"不可恢复"强制停止进程（项目崩溃阻断设计），不能在测试里触发。
-    try:
-        await repo._ensure_connection()
-        print("✗ 关闭后访问未被拒绝")
-        return 1
-    except StorageError as e:
-        print(f"✓ 关闭后访问被拒绝: StorageError({e})")
+        with patch.object(self.repo, "_insert_messages", side_effect=insert):
+            save = asyncio.create_task(self.repo.store_message(message("private_100")))
+            await asyncio.wait_for(partial_write.wait(), 5)
+            save.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await save
+        self.assertFalse(await self.repo.session_exists("private_100"))
+        await self.repo.reconfigure(self.temp.name, "other.db")
+        self.assertEqual((await self.repo.store_message(message("private_200")))["status"], "success")
 
-    print("\n验收通过：初始化竞态已修复")
-    return 0
+    async def test_route_is_preserved_across_independent_connections(self):
+        peer = MessageRepository(self.temp.name)
+        self.addAsyncCleanup(peer.close)
+        await asyncio.gather(self.repo.ensure_ready(), peer.ensure_ready())
+        results = await asyncio.gather(
+            self.repo.store_message(message("private_100", "qq")),
+            peer.store_message(message("private_100", "wechat")),
+            return_exceptions=True,
+        )
+        self.assertEqual(sum(isinstance(result, ValidationError) for result in results), 1)
+        winner = "wechat" if isinstance(results[0], ValidationError) else "qq"
+        self.assertEqual((await self.repo.session_route("private_100"))["platform"], winner)
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    unittest.main()

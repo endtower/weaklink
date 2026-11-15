@@ -31,6 +31,7 @@ import time
 from typing import Dict, List, Optional
 
 from utils import setup_logging, NetworkError, async_handle_errors
+from utils.chain_context import abort_current_chain, ensure_chain_active
 
 from .protocol import (
     Channel,
@@ -86,7 +87,7 @@ class OutboundRouter:
     # 发送
     # --------------------------------------------------------
 
-    @async_handle_errors(error_types=(NetworkError,))
+    @async_handle_errors(error_types=(Exception,), raise_on=(Exception,))
     async def send(
         self,
         platform: str | Platform,
@@ -100,6 +101,7 @@ class OutboundRouter:
         2. SIMULATED_SEND=False → 推到 OneBot/NapCat
         3. 落库 (无论哪种模式都做, OneBot v11 段格式与 NapCat 入站一致)
         """
+        ensure_chain_active()
         p = platform if isinstance(platform, Platform) else Platform.parse(platform)
         ch = self._channels.get(p)
         if ch is None:
@@ -136,12 +138,18 @@ class OutboundRouter:
                 f"[OutboundRouter] -> {p.value} {target.scope.value}:{target.target_id} "
                 f"({len(segments)} segments)"
             )
-            message_id = await ch.send(target, payload)
+            try:
+                message_id = await ch.send(target, payload)
+            except asyncio.CancelledError:
+                abort_current_chain()
+                raise
             if isinstance(message_id, SendReceipt):
                 # A queued/actioned bridge receipt is not a message and must not be inserted as one.
+                if message_id.status in ("unknown", "prepared", "rejected", "failed"):
+                    abort_current_chain()
                 return message_id
             if not message_id:
-                return message_id
+                raise NetworkError("平台未返回发送回执，请核对发送结果")
 
         # 落库 (两模式通用, OneBot v11 段格式)
         # 独立接入服务已在发送回执后落库；模拟发送仍由本地记录。

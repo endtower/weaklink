@@ -854,18 +854,6 @@ class WebChannel:
                 await self._handle_get_trucks(ws)
             elif kind == "set_truck":
                 await self._handle_set_truck(data, ws)
-            elif kind == "switch_test_mode":
-                await self._handle_switch_test_mode(data, ws)
-            elif kind == "list_presets":
-                await self._handle_list_presets(ws)
-            elif kind == "apply_env":
-                await self._handle_apply_env(data, ws)
-            elif kind == "capture_mirror":
-                await self._handle_capture_mirror(data, ws)
-            elif kind == "copy_state":
-                await self._handle_copy_state(data, ws)
-            elif kind == "delete_preset":
-                await self._handle_delete_preset(data, ws)
             else:
                 await self._send_error(ws, f"unknown type: {kind!r}")
         except Exception as e:
@@ -1174,27 +1162,14 @@ class WebChannel:
             },
         )
 
-        # 4) echo
-        await self._broadcast({
-            "type": "user_echo",
-            "session_id": sid,
-            "message_id": message_id,
-            "text": text,
-            "images": [seg.data.get("file", "") for seg in file_segs],
-            "timestamp": now,
-            "user_id": active.user_id,
-            "user_name": active.user_name,
-            "role": None,
-        })
-
-        # 5) 入站直达消息处理器
+        # 入站直达消息处理器，落库成功后才广播回执。
         if self._message_processor is None:
             await self._send_error(ws, "message_processor not bound")
             return
         try:
             payload = ev.to_system_message_dict()
             # Web 只是输入入口：命中已有会话时沿用它自己的平台来源，不另立 web 来源。
-            # 否则 store_message 会判「会话来源冲突」并让 Core 直接崩溃。
+            # 否则 store_message 会拒绝改变已有会话的路由。
             route = await self._store.session_route(sess.scope, sid)
             if route is not None:
                 payload["session_info"].update(
@@ -1202,6 +1177,17 @@ class WebChannel:
                     remote_session_id=route["remote_session_id"], generation=route["generation"],
                 )
             await self._message_processor.process_message(payload)
+            await self._broadcast({
+                "type": "user_echo",
+                "session_id": sid,
+                "message_id": message_id,
+                "text": text,
+                "images": [seg.data.get("file", "") for seg in file_segs],
+                "timestamp": now,
+                "user_id": active.user_id,
+                "user_name": active.user_name,
+                "role": None,
+            })
             logger.debug(
                 f"[Web] dispatched: session={sid} user={sess.user_id} "
                 f"role={sess.role!r} text={content_text[:60]!r} images={len(file_segs)}"
@@ -1393,117 +1379,6 @@ class WebChannel:
             "trucks": result.get("all", []),
             "changed": result.get("snapshot"),
         })
-
-    # --------------------------------------------------------
-    # 测试模式：重定向存储单例数据库
-    # --------------------------------------------------------
-
-    async def _handle_switch_test_mode(self, data: Dict, ws: web.WebSocketResponse) -> None:
-        from memory.message_repository import switch_message_store
-        from brain.hc.database.core import switch_memory_db
-
-        enable = bool(data.get("enable"))
-        # 测试隔离库路径（tests/fixtures/scope）
-        scope_root = Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures" / "scope"
-        if enable:
-            await switch_message_store(scope_root / "chat_history", db_name="test_chat_history.db")
-            await switch_memory_db(scope_root / "memory.db")
-            # 隔离 amy：收敛真实 monitor 并清空双单例，使下次访问指向测试 amy 目录
-            await self._redirect_amy(scope_root / "amy")
-        else:
-            # 恢复真实库（不传参回到默认路径）
-            await switch_message_store()
-            await switch_memory_db()
-            # 恢复真实 amy：收敛测试 monitor 并清空双单例，下次访问重建真实实例
-            await self._redirect_amy(None)
-        await ws.send_json({
-            "type": "test_mode_switched",
-            "enable": enable,
-            "ok": True,
-        })
-
-    @staticmethod
-    async def _redirect_amy(persistence_dir) -> None:
-        """重指向 amy 持久化目录（走模块公有 reset 入口，不触碰内部全局）。
-
-        persistence_dir: 传入隔离目录则测试 amy；None 则下次访问重建真实 amy。
-        """
-        from brain.amy.emotional_interface import reset_emotional_interface, get_emotional_interface
-
-        await reset_emotional_interface()
-        if persistence_dir is not None:
-            # 重建指向测试目录的 amy（bootstrap 系统 act + monitor）
-            await get_emotional_interface(Path(persistence_dir))
-
-    async def _handle_list_presets(self, ws: web.WebSocketResponse) -> None:
-        """分块预设清单：{ memory: [...], chat: [...], amy: [...] }。"""
-        from tests.preset_env import list_presets
-
-        await ws.send_json({"type": "presets", "blocks": list_presets()})
-
-    async def _handle_apply_env(self, data: Dict, ws: web.WebSocketResponse) -> None:
-        """分块环境准备：按所选块还原预设（仅还原，无进阶操作）。
-
-        data: { memory?, chat?, amy? }，各块预设名（"默认"或情景名），缺省/空 = 不动该块。
-        """
-        from tests.preset_env import apply_env
-
-        memory = (data.get("memory") or "").strip() or None
-        chat = (data.get("chat") or "").strip() or None
-        amy = (data.get("amy") or "").strip() or None
-        await apply_env(memory=memory, chat=chat, amy=amy)
-        await ws.send_json({
-            "type": "env_applied",
-            "memory": memory,
-            "chat": chat,
-            "amy": amy,
-            "ok": True,
-        })
-
-    async def _handle_capture_mirror(self, data: Dict, ws: web.WebSocketResponse) -> None:
-        """抓取指定分块的正式（真实）环境为镜像预设并命名。
-
-        data: { block: memory|chat|amy, name }。
-        """
-        from tests.preset_env import capture_mirror
-
-        block = (data.get("block") or "").strip()
-        name = (data.get("name") or "").strip()
-        if not block or not name:
-            await self._send_error(ws, "block 与 name 必填")
-            return
-        await capture_mirror(block, name)
-        await ws.send_json({"type": "mirror_captured", "block": block, "name": name, "ok": True})
-
-    async def _handle_copy_state(self, data: Dict, ws: web.WebSocketResponse) -> None:
-        """复制当前（测试）状态为命名预设情景文件。
-
-        data: { block: memory|chat|amy, name }。
-        """
-        from tests.preset_env import copy_state
-
-        block = (data.get("block") or "").strip()
-        name = (data.get("name") or "").strip()
-        if not block or not name:
-            await self._send_error(ws, "block 与 name 必填")
-            return
-        await copy_state(block, name)
-        await ws.send_json({"type": "state_copied", "block": block, "name": name, "ok": True})
-
-    async def _handle_delete_preset(self, data: Dict, ws: web.WebSocketResponse) -> None:
-        """删除指定分块的某个预设情景文件。
-
-        data: { block: memory|chat|amy, name }。
-        """
-        from tests.preset_env import delete_preset
-
-        block = (data.get("block") or "").strip()
-        name = (data.get("name") or "").strip()
-        if not block or not name:
-            await self._send_error(ws, "block 与 name 必填")
-            return
-        await delete_preset(block, name)
-        await ws.send_json({"type": "preset_deleted", "block": block, "name": name, "ok": True})
 
     # --------------------------------------------------------
     # 出站：LLM 回复

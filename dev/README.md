@@ -30,13 +30,17 @@
 
 ```powershell
 python scripts/build_public_release.py --output ../cache/builds/public-<唯一名称> --feed-base-url <清单地址> --package-base-url <包地址> --metadata releases/core-<版本>.json
-python scripts/acceptance_data_paths.py
+python scripts/run_foundation_checks.py
 python scripts/acceptance_source_layout.py --app ../app
 ```
 
 输出目录必须是新目录，不能覆盖 `app` 或 `data`。本机工具链位于 `../cache/tools/`；构建产物在 `../cache/builds/`，隔离测试在 `../cache/tests/`。`.NET` 项目由 `Directory.Build.props` 统一设置输出位置。
 
 公开构建生成一个启动器 EXE，以及管理服务、Core 的源码和匹配运行环境，不再构建独立业务 EXE。旧 PyInstaller 工程与独立更新器入口已归档到 `../private/legacy-build-tools/`，不属于当前构建流程。
+
+管理服务从 `scripts/build_source_distribution.py` 中的文件清单打包。随包网页只包含编译后的资源，供 Core 未安装时使用。管理服务的 Python 依赖维护在 `manager_requirements.txt`。
+
+构建网页后，可用 `python scripts/run_preset_sandbox.py --chat <预设.json>` 在本机 5502 端口打开测试网页。可组合 `--memory`、`--chat`、`--amy`，留空的部分从空状态开始。每次启动都会在 `../cache/tests/` 新建数据目录，并使用公开版的代码默认值。只准备数据时加 `--prepare-only`，无需构建网页。
 
 安装、源码修改保护与恢复规则见 [updater/README.md](updater/README.md)；目录所有权见 [docs/STORAGE.md](docs/STORAGE.md)；用户操作指南见 [../AGENTS.md](../AGENTS.md)。
 

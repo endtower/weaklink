@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional
 from utils.logger import get_logger
 from utils.error_handling import async_handle_errors
 from utils.chain_context import (
+    abort_current_chain,
+    ensure_chain_active,
     generate_chain_id,
     set_chain_context,
     reset_chain_context,
@@ -67,6 +69,7 @@ async def run_pfc_cycle(
     max_legs = 10
 
     while state:
+        ensure_chain_active()
         max_legs -= 1
         if max_legs < 0:
             raise RuntimeError(
@@ -101,6 +104,11 @@ async def run_pfc_cycle(
                 result = await get_pfca_instance().start(
                     purpose=purpose, current_session=session_ctx
                 )
+                ensure_chain_active()
+            except BaseException:
+                abort_current_chain()
+                focus_state._data.pop("pfc_handoff", None)
+                raise
             finally:
                 # 本协调器新开的事件链在腿结束后收尾（未真正结束路径缓存丢弃）
                 try:
@@ -111,9 +119,15 @@ async def run_pfc_cycle(
                         reset_chain_context(chain_token)
             session_ctx = None  # 接力腿无原始会话上下文
         elif state == "reflection":
-            result = await get_reflection_instance().start(
-                purpose=purpose, current_session=None
-            )
+            try:
+                result = await get_reflection_instance().start(
+                    purpose=purpose, current_session=None
+                )
+                ensure_chain_active()
+            except BaseException:
+                abort_current_chain()
+                focus_state._data.pop("pfc_handoff", None)
+                raise
         else:
             raise ValueError(f"未知 PFC 接力状态: {state!r}")
 

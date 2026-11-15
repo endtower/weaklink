@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import psutil
+from aiohttp import ClientSession
 
 from workspace_layout import test_root
 
@@ -24,9 +26,29 @@ def free_port():
         return sock.getsockname()[1]
 
 
+async def check_public_websocket(port):
+    async with ClientSession() as session:
+        async with session.ws_connect(f"http://127.0.0.1:{port}/web/ws") as ws:
+            async def receive(kind):
+                async with asyncio.timeout(5):
+                    while True:
+                        reply = await ws.receive_json()
+                        if reply["type"] == kind:
+                            return reply
+
+            assert isinstance((await receive("hello"))["sessions"], list)
+            for kind in ("switch_test_mode", "list_presets", "apply_env", "capture_mirror", "copy_state", "delete_preset"):
+                await ws.send_json({"type": kind, "enable": True})
+                reply = await receive("error")
+                assert reply["message"] == f"unknown type: {kind!r}", reply
+            await ws.send_json({"type": "ping"})
+            await receive("pong")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release", type=Path, required=True)
+    parser.add_argument("--previous-manager", type=Path, help="Optional previous Manager ZIP with adjacent JSON manifest")
     args = parser.parse_args()
     release = args.release.resolve()
     versions = json.loads((release / "build-summary.json").read_text(encoding="utf-8"))["versions"]
@@ -97,6 +119,14 @@ def main():
         status = call("/v1/updates")
         assert next(x for x in status["components"] if x["component"] == "core")["current"] == "未安装"
         assert not (program / "components/core").exists()
+        manager = program / "components/manager"
+        assert not (manager / "source/brain").exists()
+        assert not (manager / "source/web_frontend/src").exists()
+        assert not (manager / "source/ingress_service.py").exists()
+        assert not (manager / "runtime/Lib/site-packages/openai").exists()
+        token = (data / "manager/service_token.txt").read_text().strip()
+        with urlopen(Request(base + "/index.html", headers={"X-Manager-Token": token}), timeout=20) as response:
+            assert response.read() == (manager / "source/web_frontend/dist/index.html").read_bytes()
         print("PASS single EXE bootstraps manager without system Python or automatic Core download", flush=True)
         manager_archive = release / "packages" / f"manager-{versions['manager']}.zip"
         manager_stage = call("/v1/updates/import", {"component": "manager", "path": str(manager_archive)})
@@ -127,6 +157,8 @@ def main():
         with urlopen(Request(base + "/console/trucks", headers={"X-Manager-Token": (data / "manager/service_token.txt").read_text().strip()}), timeout=20) as response:
             assert all(x["runtime_state"] == "stopped" for x in json.load(response)["trucks"])
         print("PASS isolated Core and ingress start from bundled source with all Trucks disabled", flush=True)
+        asyncio.run(check_public_websocket(web_port))
+        print("PASS the public WebSocket rejects developer preset commands and still handles normal traffic", flush=True)
         source = bundle / "source/brain/att/proactive/proactive_core.py"
         original = source.read_bytes()
         source.write_bytes(original + b"\n# local user edit\n")
@@ -150,6 +182,19 @@ def main():
         backups = list((fixture / "backups/updates").glob("*/data-backup/memory/memory.db"))
         assert backups, "Core data backup missing"
         print("PASS confirmed reinstall backs up data and restores previously running source processes", flush=True)
+        if args.previous_manager:
+            previous_manager = args.previous_manager.resolve()
+            legacy_version = json.loads(previous_manager.with_suffix(".json").read_text(encoding="utf-8-sig"))["version"]
+            for package, manager_version in ((previous_manager, legacy_version), (manager_archive, versions["manager"])):
+                call("/v1/updates/import", {"component": "manager", "path": str(package)})
+                started = call("/v1/updates/apply", {"component": "manager", "version": manager_version})
+                assert started["ok"], started
+                until(lambda: call("/v1/info")["version"] == manager_version and not call("/v1/updates")["active"], 600)
+                assert targets()["core"]["ready"] and targets()["ingress"]["ready"]
+                assert (data / "sentinel.txt").read_text() == "keep-user-data"
+            assert not any((manager / "source/brain").rglob("*.py"))
+            assert not (manager / "runtime/Lib/site-packages/openai/__init__.py").exists()
+            print("PASS Manager downgrades and updates again, removes superseded files, and restores Core and ingress", flush=True)
         # 验证外部更新器真实返回码；恢复成功不能被管理服务误判成失败。
         target, payload, transaction = (fixture / name for name in ("rollback-program", "rollback-payload", "rollback-transaction"))
         for folder in (target, payload, transaction, fixture / "rollback-data/manager/updates"):

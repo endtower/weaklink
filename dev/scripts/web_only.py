@@ -33,23 +33,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import errno
-import os
 import sys
 import webbrowser
 from pathlib import Path
 
-# 修正 cwd 到项目根：代码里有大量 memory/... logs/... 相对路径，
-# 必须与"在项目根目录跑 python main.py"时的环境一致
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
-os.chdir(PROJECT_ROOT)
 
-# .env.dev 存在则加载（与 main.py 行为一致；不存在则跳过）
-try:
-    from dotenv import load_dotenv
-    load_dotenv(PROJECT_ROOT / ".env.dev")
-except ImportError:
-    pass
+from paths import data_root, ensure_cwd, load_data_env
 
 
 def _parse_args() -> argparse.Namespace:
@@ -70,6 +61,8 @@ def _is_addr_in_use(e: OSError) -> bool:
 
 def main() -> int:
     args = _parse_args()
+    ensure_cwd()
+    load_data_env()
 
     from config.adapt_settings import get_web_config
     from adapt.web import WebChannel, WebChannelConfig
@@ -96,7 +89,7 @@ def main() -> int:
     print("=" * 60)
     print("  Abyss Web · 只读模式 (web_only)")
     print(f"  前端 + API : {url}")
-    print(f"  数据目录   : {PROJECT_ROOT}")
+    print(f"  数据目录   : {data_root()}")
     print(f"  注意: 与完整版 (main.py) 共用端口 {cfg.port}，二选一运行")
     print("  Ctrl+C 退出")
     print("=" * 60, flush=True)

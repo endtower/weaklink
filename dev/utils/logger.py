@@ -12,7 +12,7 @@
 5. 启动期清理超过保留期的历史日志
 """
 
-from paths import log_root, resource_root
+from paths import log_root
 import os
 import logging
 import sys
@@ -22,7 +22,6 @@ import threading
 from logging.handlers import RotatingFileHandler
 from typing import Optional, Callable, Awaitable, List
 from pathlib import Path
-from dotenv import load_dotenv
 
 # 定义ANSI颜色代码
 class Colors:
@@ -289,10 +288,6 @@ def setup_logging(name: str = 'app', log_level: Optional[int or str] = None) -> 
     Returns:
         logging.Logger: 配置好的日志记录器实例
     """
-    # 旧版可选兼容 env（随包资源；正式配置走项目根 .env.dev）
-    env_path = resource_root() / 'config' / '.env'
-    load_dotenv(env_path)
-    
     # 确保日志目录存在
     log_dir = log_root()
     log_dir.mkdir(parents=True, exist_ok=True)

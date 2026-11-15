@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from utils.logger import get_logger
+from utils.chain_context import CHAIN_OPERATION_ERRORS
 from .base_truck import BaseTruck
 
 logger = get_logger('task_truck', 'INFO')
@@ -62,6 +63,10 @@ class TaskTruck(BaseTruck):
                         f"{[t.get('title') for t in tasks]}"
                     )
                     await self.remind_station()
+                await self.cycle_control()
+            except CHAIN_OPERATION_ERRORS as exc:
+                self._triggered_tasks = []
+                logger.warning("本轮到期任务检查失败: %s", exc)
                 await self.cycle_control()
             except Exception as e:
                 # 硬约定：关键环节失败不允许继续运行，直接崩溃阻断

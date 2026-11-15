@@ -13,6 +13,10 @@ import asyncio
 from typing import Any, Dict, Optional
 
 from utils.error_handling import async_handle_errors
+from utils.chain_context import (
+    CHAIN_OPERATION_ERRORS, ChainAbortedError, abort_current_chain, ensure_chain_active,
+    get_chain_context, reset_chain_context, set_chain_context,
+)
 from utils.logger import get_logger
 
 logger = get_logger("ProactiveCore", "INFO")
@@ -79,18 +83,21 @@ class ProactiveCore:
             session = None
             chain_token = None
             try:
+                chain = task_draft.pop("_chain_context", None) or task_draft.get("chain_id")
+                chain_token = set_chain_context(chain) if chain else None
+                ensure_chain_active()
                 # 导入和构造也会失败，必须纳入同一个完成通知边界。
                 from .proactive_session import ProactiveSession
-                from utils.chain_context import set_chain_context, reset_chain_context
-                chain_id = task_draft.get("chain_id")
-                chain_token = set_chain_context(chain_id) if chain_id else None
                 session = ProactiveSession(task_draft)
                 self.current_session = session
                 await session.start()
+                ensure_chain_active()
             except asyncio.CancelledError:
-                task_draft["_error"] = RuntimeError("ProactiveCore 会话被取消")
+                abort_current_chain()
+                task_draft["_error"] = ChainAbortedError("主动任务会话被取消")
                 raise
             except Exception as e:
+                abort_current_chain()
                 task_draft["_error"] = e
                 logger.exception("ProactiveSession 初始化或执行失败")
             finally:
@@ -103,7 +110,9 @@ class ProactiveCore:
                 #   - 调 launch_pfca → {intent, tool_name='launch_pfca', tool_result}
                 #   - 调 skip_proactive → {intent, tool_name='skip_proactive', skipped=True}
                 #   - 没调任何终结工具 / 异常 → None
-                task_draft["_decision_result"] = getattr(session, "decision_result", None)
+                task_draft["_decision_result"] = (
+                    getattr(session, "decision_result", None) if "_error" not in task_draft else None
+                )
                 # 通知外部（truck / station）本次 session 已结束
                 completion = task_draft.get("_completion_event")
                 if completion is not None:
@@ -120,10 +129,14 @@ class ProactiveCore:
         """
         worker = self._main_task
         if not self.is_running or worker is None or worker.done():
-            raise RuntimeError("ProactiveCore 主循环未运行，无法处理主动任务")
+            abort_current_chain()
+            raise ChainAbortedError("ProactiveCore 主循环未运行，无法处理主动任务")
         # 给 task 加一个完成事件, main_loop 处理完会 set 它
         completion = asyncio.Event()
         task_draft["_completion_event"] = completion
+        chain = get_chain_context()
+        if chain is not None and chain.id == task_draft.get("chain_id"):
+            task_draft["_chain_context"] = chain
         await self.task_queue.put(task_draft)
         # 同时观察消费者存活；任务在出队前被取消也不能永久挂住 station。
         waiter = asyncio.create_task(completion.wait())
@@ -132,10 +145,16 @@ class ProactiveCore:
             if not completion.is_set():
                 if not worker.cancelled():
                     worker.result()
-                raise RuntimeError("ProactiveCore 主循环已停止，主动任务未完成")
+                abort_current_chain()
+                raise ChainAbortedError("ProactiveCore 主循环已停止，主动任务未完成")
             error = task_draft.get("_error")
             if error is not None:
+                if isinstance(error, CHAIN_OPERATION_ERRORS):
+                    raise error
                 raise RuntimeError("ProactiveCore 处理主动任务失败") from error
+        except asyncio.CancelledError:
+            abort_current_chain()
+            raise
         finally:
             waiter.cancel()
             await asyncio.gather(waiter, return_exceptions=True)

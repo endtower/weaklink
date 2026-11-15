@@ -24,6 +24,26 @@ from workspace_layout import TOOLS
 
 
 PUBLIC_COMPONENTS = ("core", "manager", "launcher")
+MANAGER_SOURCE_FILES = (
+    "manager.py", "manager_service.py", "manager_core.py", "manager_console.py", "manager_updates.py",
+    "core_update_review.py", "update_policy.py", "component_versions.json", "startup_workflow.py", "startup_plan.py",
+    "paths.py", "config_keys.py", "ingress_config.py", "truck_settings_store.py", "console_context.py", "console_history.py",
+    "core/__init__.py", "core/supervisor.py",
+    "utils/__init__.py", "utils/logger.py", "utils/error_handling.py", "utils/chain_context.py",
+    "adapt/__init__.py", "adapt/bridge/__init__.py", "adapt/bridge/config.py", "adapt/bridge/contract.py",
+    "docs/STARTUP.md",
+)
+
+
+def copy_manager_source(destination: Path, core_source: Path) -> None:
+    for name in MANAGER_SOURCE_FILES:
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, target)
+    shutil.copy2(ROOT / "manager_requirements.txt", destination / "requirements.txt")
+    shutil.copy2(ROOT / "docs/STORAGE.md", destination / "STORAGE.md")
+    # Manager can render its console before Core is installed. It needs only built assets.
+    shutil.copytree(core_source / "web_frontend/dist", destination / "web_frontend/dist")
 
 
 def validate_release_versions(versions, previous_releases):
@@ -61,16 +81,13 @@ def build(output: Path, private=False, feed_base_url="", package_base_url="", ru
         locked = copy_runtime(core / "runtime")
     (core / "runtime/requirements.lock").write_text(locked, encoding="utf-8")
     (core / "source/requirements.lock").write_text(locked, encoding="utf-8")
-    (core / "release.json").write_text(json.dumps({"version": versions["core"], **metadata}, ensure_ascii=False, indent=2), encoding="utf-8")
+    (core / "release.json").write_text(json.dumps({**metadata, "version": versions["core"]}, ensure_ascii=False, indent=2), encoding="utf-8")
     print("Core source and runtime ready", flush=True)
     manager = app / "components/manager"
-    manager.mkdir(parents=True)
-    shutil.copytree(core / "source", manager / "source")
-    for name in ("manager.py", "manager_service.py", "manager_core.py", "manager_console.py", "manager_updates.py", "core_update_review.py", "update_policy.py", "component_versions.json", "startup_workflow.py", "startup_plan.py"):
-        shutil.copy2(ROOT / name, manager / "source" / name)
-    (manager / "source/docs").mkdir(exist_ok=True)
-    shutil.copy2(ROOT / "docs/STARTUP.md", manager / "source/docs/STARTUP.md")
-    shutil.copytree(core / "runtime", manager / "runtime")
+    copy_manager_source(manager / "source", core / "source")
+    manager_lock = copy_runtime(manager / "runtime", requirements_path=ROOT / "manager_requirements.txt")
+    (manager / "runtime/requirements.lock").write_text(manager_lock, encoding="utf-8")
+    (manager / "source/requirements.lock").write_text(manager_lock, encoding="utf-8")
     (manager / "release.json").write_text(json.dumps({"version": versions["manager"], "format": "source-manager-v1"}), encoding="utf-8")
     shutil.copy2(ROOT / "component_versions.json", app / "component_versions.json")
     defaults = {"auto_check": not private, "core_distribution": "source-v1", "manager_distribution": "source-manager-v1", "sources": {

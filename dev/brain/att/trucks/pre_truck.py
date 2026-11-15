@@ -33,7 +33,7 @@ import traceback
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
-from utils.chain_context import get_current_chain_id
+from utils.chain_context import CHAIN_OPERATION_ERRORS, ensure_chain_active, get_current_chain_id
 from .base_truck import BaseTruck
 
 logger = get_logger('pre_truck', 'INFO')
@@ -194,6 +194,10 @@ class PreTruck(BaseTruck):
                 if self._pending:
                     self._last_trigger_at = time.time()
                     await self.remind_station()
+                await self.cycle_control()
+            except CHAIN_OPERATION_ERRORS as exc:
+                self._pending = None
+                logger.warning("PRE 本轮检查失败: %s", exc)
                 await self.cycle_control()
             except Exception as e:
                 # 硬约定：关键环节失败不允许继续运行，直接崩溃阻断
@@ -383,6 +387,7 @@ class PreTruck(BaseTruck):
             )
             # 阻塞到 proactive_session 退出
             await core.feed_proactive_task(task_draft)
+            ensure_chain_active()
 
             decision_result = task_draft.get("_decision_result")
             logger.info(
@@ -463,6 +468,8 @@ class PreTruck(BaseTruck):
                 "raw_sessions": raw_sessions,
                 "decision": decision_result,
             }
+        except CHAIN_OPERATION_ERRORS:
+            raise
         except Exception as e:
             logger.critical(
                 f"pre_truck 投递判断层发生致命错误，强制退出进程: "

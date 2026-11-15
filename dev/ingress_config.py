@@ -1,20 +1,14 @@
 """接入进程与 Core 共用的本机接口配置；不启动大脑或模型客户端。"""
 from __future__ import annotations
 
-import os
 import secrets
 
-from dotenv import dotenv_values
-from paths import app_root, data_root
+from config_keys import DEFAULT_ONEBOT_ENABLED
+from paths import data_root, effective_data_env
 
 
 def settings() -> dict:
-    candidate = data_root() / ".env.dev"
-    if not candidate.is_file():
-        candidate = app_root() / ".env.dev"
-    values = dict(dotenv_values(candidate)) if candidate.is_file() else {}
-    values.update(os.environ)
-    return values
+    return effective_data_env()
 
 
 def api_port() -> int:
@@ -54,5 +48,5 @@ def onebot_config():
 
 
 def onebot_enabled() -> bool:
-    from config.adapt_settings import is_onebot_enabled
-    return is_onebot_enabled()
+    value = settings().get("ONEBOT_ENABLED")
+    return value.strip().lower() in ("true", "1", "yes", "on", "y") if value else DEFAULT_ONEBOT_ENABLED

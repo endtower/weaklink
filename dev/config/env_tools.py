@@ -12,12 +12,9 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
-
-from paths import data_root
+from paths import load_data_env
 
 _ENV_LOADED = False
 
@@ -27,23 +24,12 @@ _ENV_LOADED = False
 from config_keys import CONFIG_OVERRIDE_KEYS
 
 
-def _env_candidates() -> list[Path]:
-    """只读取当前数据根；旧布局由 paths.data_root 原位识别。
-
-    显式选择新数据根后，不再误读另一份程序目录中的账号和密钥。
-    """
-    return [data_root() / ".env.dev"]
-
-
 def ensure_env_loaded() -> None:
     """加载 .env.dev（幂等；已存在的进程环境变量不会被文件覆盖）。"""
     global _ENV_LOADED
     if _ENV_LOADED:
         return
-    for candidate in _env_candidates():
-        if candidate.is_file():
-            load_dotenv(candidate)
-            break
+    load_data_env()
     _ENV_LOADED = True
 
 

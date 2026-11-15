@@ -5,8 +5,6 @@ import { channel } from '../api/channel'
 
 interface State {
   connected: boolean
-  // 系统模式: real=对话模式(真实库) / test=测试模式(测试隔离库)
-  mode: 'real' | 'test'
   sessions: WebSession[]
   activeSessionId: string | null
   messagesBySession: Record<string, UiMessage[]>
@@ -54,7 +52,6 @@ interface State {
 
 const state = reactive<State>({
   connected: false,
-  mode: 'real',
   sessions: [],
   activeSessionId: null,
   messagesBySession: {},
@@ -156,14 +153,6 @@ function setActive(sid: string) {
   if (state.sessions.find(s => s.session_id === sid)) {
     state.activeSessionId = sid
   }
-}
-
-// ============================================================
-// 系统模式 (real 对话 / test 测试)
-// ============================================================
-
-function setMode(mode: 'real' | 'test') {
-  state.mode = mode
 }
 
 // ============================================================
@@ -951,7 +940,6 @@ export const chat = {
   addSession,
   removeSession,
   setActive,
-  setMode,
   clearAll,
   loadHistory,
   loadMore,

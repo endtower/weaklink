@@ -32,9 +32,11 @@ from paths import data_root
 import json
 import logging
 import os
+import sqlite3
 import sys
 import time
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -86,6 +88,7 @@ class MessageRepository:
         self._ready = False
         self._closed = False
         self._init_lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
 
     # ============================================================
     # 连接管理
@@ -117,28 +120,45 @@ class MessageRepository:
             try:
                 conn = await aiosqlite.connect(self._db_path)
                 conn.row_factory = aiosqlite.Row
-                cur = await conn.execute("PRAGMA journal_mode=WAL")
-                await cur.fetchall()
                 # 并发写等待：多进程同读写 chat_history.db 时短暂等待而非报锁
                 # （PRAGMA 光标同样必须消费，见 database/core.py 的注释）
                 cur = await conn.execute("PRAGMA busy_timeout=5000")
                 await cur.fetchall()
+                await self._enable_wal(conn)
                 await self._create_tables(conn)
                 if os.getenv("ABYSS_DEBUG_DB"):
                     probe = await conn.execute("SELECT name FROM sqlite_master")
                     names = [r[0] for r in await probe.fetchall()]
                     print(f"[dbdebug] pid={os.getpid()} db={self._db_path} "
                           f"tables={names}", file=sys.stderr, flush=True)
-            except BaseException:
+            except BaseException as exc:
                 if conn is not None:
                     try:
                         await conn.close()
                     except Exception:
                         pass
+                if isinstance(exc, aiosqlite.Error):
+                    raise StorageError(f"打开消息库失败: {exc}") from exc
                 raise
             self._conn = conn   # 全部就绪才发布
             self._ready = True
         return self._conn
+
+    @staticmethod
+    async def _enable_wal(conn: aiosqlite.Connection) -> None:
+        # Concurrent first opens can contend on the mode change itself.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5
+        while True:
+            try:
+                async with conn.execute("PRAGMA journal_mode=WAL") as cursor:
+                    await cursor.fetchall()
+                return
+            except aiosqlite.OperationalError as exc:
+                code = getattr(exc, "sqlite_errorcode", 0) & 0xFF
+                if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or loop.time() >= deadline:
+                    raise
+                await asyncio.sleep(0.05)
 
     async def _create_tables(self, conn: aiosqlite.Connection) -> None:
         """建表（显式接受连接：初始化期间不依赖提前发布的 self._conn）。"""
@@ -180,8 +200,8 @@ class MessageRepository:
         await conn.commit()
 
     async def close(self) -> None:
-        """关闭数据库连接（与初始化串行化，避免和建表竞争）。"""
-        async with self._init_lock:
+        """Wait for pending writes before closing the repository."""
+        async with self._write_lock, self._init_lock:
             self._closed = True
             if self._conn is not None:
                 await self._conn.close()
@@ -191,6 +211,25 @@ class MessageRepository:
     async def ensure_ready(self) -> None:
         """显式就绪钩子（SystemCore start 用）：完成连接 + 建表，先于业务并发。"""
         await self._ensure_connection()
+
+    @asynccontextmanager
+    async def _write_transaction(self):
+        # A separate connection keeps readers on the committed snapshot.
+        # The lock also prevents a test-mode path switch during a write.
+        async with self._write_lock:
+            await self._ensure_connection()
+            try:
+                async with aiosqlite.connect(self._db_path, timeout=5) as conn:
+                    conn.row_factory = aiosqlite.Row
+                    try:
+                        await conn.execute("BEGIN IMMEDIATE")
+                        yield conn
+                        await conn.commit()
+                    except BaseException:
+                        await conn.rollback()
+                        raise
+            except aiosqlite.Error as exc:
+                raise StorageError(f"SQLite 写入失败: {exc}") from exc
 
     async def bridge_session_id(self, connection_id: str, generation: str, remote_id: str) -> str:
         """Return the persistent numeric address for one remote WeChat session."""
@@ -206,7 +245,7 @@ class MessageRepository:
         在初始化锁内完成：关旧连接、换路径、复位就绪状态；持有同一实例的
         模块自动跟随。任何失败直接抛异常阻断，不 try-ex 兜底继续。
         """
-        async with self._init_lock:
+        async with self._write_lock, self._init_lock:
             if self._conn is not None:
                 await self._conn.close()
                 self._conn = None
@@ -327,8 +366,6 @@ class MessageRepository:
         if not message_list:
             raise ValidationError("无效的消息数据: message_list不能为空")
 
-        conn = await self._ensure_connection()
-
         # 更新会话信息
         latest_timestamp = max(msg.get("timestamp", 0) for msg in message_list)
 
@@ -344,7 +381,7 @@ class MessageRepository:
         if "remark" in session_info:
             session_update["remark"] = session_info["remark"]
 
-        try:
+        async with self._write_transaction() as conn:
             if "platform" in session_info:
                 route = (str(session_info["platform"]), str(session_info["connection_id"]),
                          str(session_info["remote_session_id"]), str(session_info.get("generation", "")))
@@ -366,13 +403,6 @@ class MessageRepository:
                  session_update.get("remark", ""), latest_timestamp),
             )
             inserted, skipped = await self._insert_messages(conn, session_id, message_list)
-            await conn.commit()
-        except (aiosqlite.Error, ValidationError) as e:
-            await conn.rollback()
-            if isinstance(e, ValidationError):
-                raise
-            # 写入失败绝不吞掉：包装为 StorageError，由装饰器 raise_on 崩溃阻断
-            raise StorageError(f"SQLite 写入失败 (session={session_id}): {e}") from e
 
         logger.debug(f"消息已成功存储到会话 {session_id}（新增 {inserted} 条，重投递跳过 {skipped} 条）")
         first_message_id = message_list[0].get("message_id", "unknown")
@@ -384,6 +414,26 @@ class MessageRepository:
             "stored_at": str(self._db_path),
             "total_messages_stored": len(message_list),
         }
+
+    async def find_message_sequence(self, session_id: str, message_id: str,
+                                    timestamp: float, content_text: str) -> int | None:
+        """Resolve a committed message, including the historical reused-ID form."""
+        conn = await self._ensure_connection()
+        async with conn.execute(
+            "SELECT seq FROM messages WHERE session_id=? AND timestamp=? "
+            "AND content_text=? AND message_id IN (?, ?) ORDER BY seq DESC LIMIT 1",
+            (session_id, timestamp, content_text, message_id, f"{message_id}_{timestamp}"),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row["seq"] if row is not None else None
+
+    async def update_message_segments(self, sequence: int, segments: list[dict]) -> None:
+        """Enrich attachments without changing the original text or cursor position."""
+        async with self._write_transaction() as conn:
+            await conn.execute(
+                "UPDATE messages SET content=? WHERE seq=?",
+                (json.dumps(segments, ensure_ascii=False), sequence),
+            )
 
     async def session_route(self, session_id: str) -> dict | None:
         """Explicit source routing; historical numeric QQ sessions have a narrow fallback."""
@@ -585,12 +635,10 @@ class MessageRepository:
     async def delete_session(self, session_id: str) -> Dict[str, Any]:
         """删除指定的会话及所有消息。"""
         self._validate_session_params(session_id)
-        conn = await self._ensure_connection()
-
-        await conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
-        await conn.execute("DELETE FROM sessions WHERE session_id=?", (session_id,))
-        await conn.execute("DELETE FROM cursors WHERE session_id=?", (session_id,))
-        await conn.commit()
+        async with self._write_transaction() as conn:
+            await conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+            await conn.execute("DELETE FROM sessions WHERE session_id=?", (session_id,))
+            await conn.execute("DELETE FROM cursors WHERE session_id=?", (session_id,))
 
         logger.info(f"会话 {session_id} 已删除")
         return {"status": "success", "session_id": session_id, "deleted": True}
@@ -788,13 +836,12 @@ class MessageRepository:
             position: 新的游标位置（已读到的最大 seq）。
         """
         self._validate_session_params(session_id)
-        conn = await self._ensure_connection()
-        await conn.execute(
-            """INSERT INTO cursors (session_id, consumer_id, position) VALUES (?, ?, ?)
-               ON CONFLICT(session_id, consumer_id) DO UPDATE SET position=excluded.position""",
-            (session_id, consumer_id, position),
-        )
-        await conn.commit()
+        async with self._write_transaction() as conn:
+            await conn.execute(
+                """INSERT INTO cursors (session_id, consumer_id, position) VALUES (?, ?, ?)
+                   ON CONFLICT(session_id, consumer_id) DO UPDATE SET position=excluded.position""",
+                (session_id, consumer_id, position),
+            )
 
     @async_handle_errors(error_types=(StorageError, ValidationError), log_level=logging.ERROR)
     async def get_unread_for(self, session_id: str, consumer_id: str,
@@ -944,12 +991,11 @@ class MessageRepository:
     async def delete_message(self, session_id: str, message_id: str) -> bool:
         """删除指定会话中的单条消息。返回是否找到并删除。"""
         self._validate_session_params(session_id)
-        conn = await self._ensure_connection()
-        cur = await conn.execute(
-            "DELETE FROM messages WHERE session_id=? AND message_id=?",
-            (session_id, message_id),
-        )
-        await conn.commit()
+        async with self._write_transaction() as conn:
+            cur = await conn.execute(
+                "DELETE FROM messages WHERE session_id=? AND message_id=?",
+                (session_id, message_id),
+            )
         return cur.rowcount > 0
 
     @async_handle_errors(error_types=(StorageError, ValidationError), log_level=logging.ERROR)
@@ -958,23 +1004,18 @@ class MessageRepository:
         self._validate_session_params(session_id)
         if not message_ids:
             return []
-        conn = await self._ensure_connection()
         placeholders = ",".join("?" * len(message_ids))
-        # 先查存在的 id（rowcount 不告知具体删了哪些, 广播需要确切列表）
-        cur = await conn.execute(
-            f"SELECT message_id FROM messages WHERE session_id=? AND message_id IN ({placeholders})",
-            (session_id, *message_ids),
-        )
-        rows = await cur.fetchall()
-        existing = [r["message_id"] for r in rows]
-        if not existing:
-            return []
-        ph = ",".join("?" * len(existing))
-        await conn.execute(
-            f"DELETE FROM messages WHERE session_id=? AND message_id IN ({ph})",
-            (session_id, *existing),
-        )
-        await conn.commit()
+        async with self._write_transaction() as conn:
+            cur = await conn.execute(
+                f"SELECT message_id FROM messages WHERE session_id=? AND message_id IN ({placeholders})",
+                (session_id, *message_ids),
+            )
+            existing = [r["message_id"] for r in await cur.fetchall()]
+            if existing:
+                await conn.execute(
+                    f"DELETE FROM messages WHERE session_id=? AND message_id IN ({placeholders})",
+                    (session_id, *message_ids),
+                )
         return existing
 
     @async_handle_errors(error_types=(StorageError, ValidationError), log_level=logging.ERROR)
@@ -982,16 +1023,15 @@ class MessageRepository:
                              remark: str = "") -> Dict[str, Any]:
         """创建空会话（只写 sessions 行，不写消息）。已存在则更新名称。"""
         self._validate_session_params(session_id)
-        conn = await self._ensure_connection()
-        await conn.execute(
-            """INSERT INTO sessions (session_id, session_name, remark, last_update_time)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(session_id) DO UPDATE SET
-                   session_name=excluded.session_name,
-                   remark=excluded.remark""",
-            (session_id, session_name, remark, int(time.time())),
-        )
-        await conn.commit()
+        async with self._write_transaction() as conn:
+            await conn.execute(
+                """INSERT INTO sessions (session_id, session_name, remark, last_update_time)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(session_id) DO UPDATE SET
+                       session_name=excluded.session_name,
+                       remark=excluded.remark""",
+                (session_id, session_name, remark, int(time.time())),
+            )
         return {"status": "success", "session_id": session_id}
 
     @async_handle_errors(error_types=(StorageError, ValidationError), log_level=logging.ERROR)

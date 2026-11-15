@@ -24,6 +24,8 @@ from pickle import TRUE
 import openai
 from typing import Dict, Any, List, Optional
 from utils.logger import get_logger
+from utils.chain_context import abort_current_chain, ensure_chain_active
+from utils.error_handling import NetworkError
 from config.llm_settings import LLMConfig, LLMSettings, resolve_provider_label
 
 logger = get_logger('LLMClientManager', log_level='INFO')
@@ -316,7 +318,11 @@ class LLMClient:
 
         if self._client is None:
             self._client = openai.AsyncOpenAI(**self._client_options)
-        response = await self._create_with_retry(request_params)
+        try:
+            response = await self._create_with_retry(request_params)
+        except openai.APIError as exc:
+            abort_current_chain()
+            raise NetworkError(f"模型调用失败: {exc}") from exc
 
         if budget is not None and response.usage is not None:
             budget.record(response.usage.total_tokens)
@@ -334,6 +340,7 @@ class LLMClient:
             usage=response.usage,
         )
 
+        ensure_chain_active()
         return response
 
     @staticmethod
@@ -379,6 +386,7 @@ class LLMClient:
                         f"LLM 调用失败，{interval:g}s 后第 {attempt - 1}/{attempts - 1} 次重试"
                     )
                     await asyncio.sleep(interval)
+                ensure_chain_active()
                 return await self._client.chat.completions.create(**request_params)
             except BaseException as exc:
                 last_exc = exc

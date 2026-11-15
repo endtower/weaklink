@@ -11,10 +11,11 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+from workspace_layout import test_root
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-_sandbox = tempfile.TemporaryDirectory(prefix="abyss-critical-")
+_sandbox = tempfile.TemporaryDirectory(prefix="abyss-critical-", dir=test_root())
 os.environ["ABYSS_DATA_DIR"] = _sandbox.name
 personas = Path(_sandbox.name) / "brain/base/persona"
 personas.mkdir(parents=True)

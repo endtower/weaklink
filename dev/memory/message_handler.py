@@ -218,17 +218,13 @@ class MessageHandler:
         全链路统一 async/await：channel 协程内直接 await 本方法（MessageBus 已删除）；
         内部直接 await store_message(...)。
 
-        消息落库是数据完整性的关键路径（硬约定：重大关键方法失败必须崩溃阻断，
-        防止静默丢消息）：本方法内任何异常都会记录日志后 os._exit(1) 终止进程
-        （raise_on=(Exception,)），因此方法体内不再写 try/except。
+        落库失败向接入调用方报告，并停止当前事件链。
 
         Args:
             message: 待处理的消息数据，包含session_info和message_list字段
         """
         if not self.is_running:
-            # 消息处理器未运行还收到消息 = 启动/停止时序有误，直接崩溃阻断，
-            # 绝不静默丢弃消息（KNOWN_ISSUES #11 教训）
-            raise MessageError("消息处理器未运行，拒绝接收消息（时序错误，崩溃阻断）")
+            raise MessageError("消息处理器未运行，拒绝接收消息")
 
         # 提取消息基本信息（用于调试日志）
         message_list = message.get('message_list', [])
@@ -240,7 +236,9 @@ class MessageHandler:
 
         # 标准化 + 直接 await 异步存储
         normalized_message = self.normalize_message_format(message)
-        await self._message_repository.store_message(normalized_message)
+        result = await self._message_repository.store_message(normalized_message)
+        if not isinstance(result, dict) or result.get("status") != "success":
+            raise MessageError("消息未成功落库")
         logger.debug(f"消息已成功存储: message_id={normalized_message['message_list'][0].get('message_id', 'unknown')}")
 
 

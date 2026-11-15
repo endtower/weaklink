@@ -21,6 +21,7 @@ from collections import deque
 from typing import Dict, List, Any, Optional
 
 from utils.logger import get_logger
+from utils.chain_context import ensure_chain_active
 from utils.error_handling import AbyssCoreError
 from utils.llm_client_manager import (
     TokenBudget, TokenBudgetExceededError, token_budget_scope, agent_scope, extract_reasoning,
@@ -140,6 +141,7 @@ class HeavySession(ABC):
         4. 若使用工具：执行工具并回灌，正式进入下一轮循环。
         5. 若未使用工具：注入警告 user 消息，继续调用 LLM，直到使用工具或达到上限。
         """
+        ensure_chain_active()
         # 自我保护检查（max_* 为 None 表示不启用该上限）
         if self.max_no_tool_call is not None and self.no_tool_call_count >= self.max_no_tool_call:
             raise AbyssCoreError(
@@ -158,7 +160,9 @@ class HeavySession(ABC):
 
         # 2. 调用 LLM（内部循环：无工具则注入警告并继续，直到使用工具或达上限）
         while True:
+            ensure_chain_active()
             assistant_message = await self._call_llm()
+            ensure_chain_active()
             if assistant_message is None:
                 logger.warning("无效的 LLM 响应格式")
                 return
@@ -172,6 +176,7 @@ class HeavySession(ABC):
                 repeat_warned = False
                 speech_used = False
                 for tool_call in assistant_message.tool_calls:
+                    ensure_chain_active()
                     if tool_call.function.name in {"send_message", "send_to_master", "send_to_target"}:
                         if speech_used:
                             self.history_manager.append({
@@ -199,6 +204,7 @@ class HeavySession(ABC):
                         self.tool_error_count += 1
                     if self._should_append_tool_response(tool_response):
                         self.history_manager.append(tool_response)
+                ensure_chain_active()
                 if repeat_warned and self.running:
                     self._inject_repeat_warning()
                 break  # 使用工具，正式进入下一轮循环

@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional
 
 from utils.logger import get_logger
+from utils.chain_context import ensure_chain_active
 
 logger = get_logger('HeavyCore', "DEBUG")
 
@@ -63,6 +64,7 @@ class HeavyCore(ABC):
             result = await session.start()
         finally:
             self._session = None
+        ensure_chain_active()
         return await self._postprocess(session, result=result, **kwargs)
 
     async def stop(self, exit_reason: Optional[str] = None) -> None:

@@ -22,6 +22,7 @@ from collections import deque
 from typing import Any, Dict, Literal, Optional
 
 from utils.error_handling import async_handle_errors
+from utils.chain_context import CHAIN_OPERATION_ERRORS, abort_current_chain
 from utils.llm_client_manager import TokenBudget, TokenBudgetExceededError, token_budget_scope, agent_scope
 from utils.logger import get_logger
 
@@ -146,7 +147,11 @@ class ProactiveSession(HeavySession):
         except TokenBudgetExceededError as e:
             self._exit_reason = str(e)
             logger.warning(f"ProactiveSession 会话因 token 预算退出: {e}")
+        except CHAIN_OPERATION_ERRORS:
+            abort_current_chain()
+            raise
         except Exception as e:
+            abort_current_chain()
             logger.warning(f"ProactiveSession 主循环异常: {e}")
             self._exit_reason = f"error: {e}"
         finally:

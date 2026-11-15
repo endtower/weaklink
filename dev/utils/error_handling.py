@@ -105,16 +105,14 @@ def handle_errors(
     错误处理装饰器。
 
     - 异常类型在 ``error_types`` 内的，会被捕获并按 ``log_level`` 记录。
-    - 落在 ``raise_on`` 子集中的异常视为"不可恢复"，记录后强制退出进程；
-      其余异常按"可恢复"处理：按 ``log_level`` 记录后返回 ``default_return``，
-      不阻塞主流程（适合需要把错误反馈给 LLM / 上层处理的场景）。
-    - ``raise_on=None`` 表示全部按可恢复处理（绝不崩溃）。
+    - 命中 ``raise_on`` 的异常会停止当前事件链并抛给调用方。
+    - 其余被捕获的异常记录后返回 ``default_return``。
 
     Args:
         error_types: 要捕获的异常类型元组（不在其中则原样抛出）。
         default_return: 可恢复异常发生时的默认返回值。
         log_level: 日志记录级别。
-        raise_on: 触发"强制停止"的异常类型子集；默认仍是所有 AbyssCoreError。
+        raise_on: 需要重新抛出的异常类型。None 表示对捕获的异常都返回默认值。
     """
     def decorator(func):
         @functools.wraps(func)
@@ -125,7 +123,7 @@ def handle_errors(
                 if not isinstance(e, error_types):
                     # 不在捕获范围内，原样抛出
                     raise
-                _handle_caught(func.__name__, e, log_level, raise_on, default_return)
+                return _handle_caught(func.__name__, e, log_level, raise_on, default_return)
         return wrapper
     return decorator
 
@@ -148,20 +146,15 @@ def async_handle_errors(
                 if not isinstance(e, error_types):
                     # 不在捕获范围内，原样抛出
                     raise
-                _handle_caught(func.__name__, e, log_level, raise_on, default_return)
+                return _handle_caught(func.__name__, e, log_level, raise_on, default_return)
         return wrapper
     return decorator
 
 
 def _handle_caught(func_name: str, exc: Exception, log_level: int,
                    raise_on, default_return):
-    """
-    统一处理被捕获的异常：区分"可恢复"与"不可恢复"。
-
-    - 不可恢复（命中 ``raise_on``）：按 ``log_level`` 记录 + CRITICAL + os._exit(1)
-    - 可恢复（未命中 ``raise_on``）：按 ``log_level`` 记录后返回 ``default_return``
-    """
-    is_fatal = raise_on is not None and isinstance(exc, raise_on)
+    """Log the failure and propagate it or return the configured fallback."""
+    should_raise = raise_on is not None and isinstance(exc, raise_on)
     message_prefix = "异步函数" if _running_in_async_context() else "函数"
     try:
         logger.log(
@@ -171,15 +164,11 @@ def _handle_caught(func_name: str, exc: Exception, log_level: int,
     except Exception:
         # 日志本身也不能阻塞主流程
         print(f"[error_handling] {func_name} 执行出错: {exc}")
-    if is_fatal:
-        for h in getattr(logger, 'handlers', []):
-            try:
-                h.flush()
-            except Exception:
-                pass
-        logger.critical("检测到严重错误，强制停止程序...")
-        import os
-        os._exit(1)
+    if should_raise:
+        from utils.chain_context import abort_current_chain
+
+        abort_current_chain()
+        raise exc
     return default_return
 
 

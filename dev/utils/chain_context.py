@@ -17,15 +17,29 @@ chain_id 由 station 出队即生成，通过 contextvar 在同任务内的 awai
 
 import uuid
 from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
 from utils.logger import get_logger
+from utils.error_handling import NetworkError, StorageError, ValidationError
 
 logger = get_logger('ChainContext', 'WARNING')
 
-# 当前任务链 ID（None = 不在任何链内，写入不归属任何链）
-_current_chain_id: ContextVar[Optional[str]] = ContextVar('current_chain_id', default=None)
+class ChainAbortedError(RuntimeError):
+    """A previous operation failed and this event chain can no longer run."""
+
+
+CHAIN_OPERATION_ERRORS = (ChainAbortedError, NetworkError, StorageError, ValidationError)
+
+
+@dataclass
+class _Chain:
+    id: str
+    aborted: bool = False
+
+
+_current_chain: ContextVar[_Chain | None] = ContextVar("current_chain", default=None)
 
 
 def generate_chain_id() -> str:
@@ -38,14 +52,31 @@ def generate_chain_id() -> str:
 
 def get_current_chain_id() -> Optional[str]:
     """获取当前任务链 ID（不在链内返回 None）。"""
-    return _current_chain_id.get()
+    chain = _current_chain.get()
+    return chain.id if chain is not None else None
 
 
-def set_chain_context(chain_id: str) -> Token:
-    """设置当前任务链 ID，返回 Token 供 reset_chain_context 恢复。"""
-    return _current_chain_id.set(chain_id)
+def get_chain_context() -> _Chain | None:
+    """Capture the same chain state for a separately scheduled worker."""
+    return _current_chain.get()
+
+
+def set_chain_context(chain: str | _Chain) -> Token:
+    return _current_chain.set(_Chain(chain) if isinstance(chain, str) else chain)
 
 
 def reset_chain_context(token: Token) -> None:
     """恢复 set_chain_context 之前的链上下文。"""
-    _current_chain_id.reset(token)
+    _current_chain.reset(token)
+
+
+def abort_current_chain() -> None:
+    chain = _current_chain.get()
+    if chain is not None:
+        chain.aborted = True
+
+
+def ensure_chain_active() -> None:
+    chain = _current_chain.get()
+    if chain is not None and chain.aborted:
+        raise ChainAbortedError(f"事件链 {chain.id} 已停止")

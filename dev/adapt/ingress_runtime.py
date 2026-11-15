@@ -18,7 +18,7 @@ from ingress_config import api_port, onebot_config, onebot_enabled, service_toke
 from memory.message_handler import MessageHandler
 from memory.message_repository import MessageRepository
 from paths import data_root
-from utils import NetworkError, setup_logging
+from utils import NetworkError, StorageError, ValidationError, setup_logging
 
 logger = setup_logging("ingress")
 SHUTDOWN_EVENT = web.AppKey("ingress_shutdown", asyncio.Event)
@@ -147,17 +147,13 @@ class IngressRuntime:
                     result = await self.repo.store_message(payload)
                     if not isinstance(result, dict) or result.get("status") != "success":
                         raise RuntimeError("标准消息未成功落库")
-                    conn = await self.repo._ensure_connection()
-                    cursor = await conn.execute(
-                        "SELECT seq FROM messages WHERE session_id=? AND timestamp=? "
-                        "AND content_text=? AND message_id IN (?, ?) ORDER BY seq DESC LIMIT 1",
-                        (event.session_id, event.timestamp, event.content_text,
-                         event.message_id, f"{event.message_id}_{event.timestamp}"))
-                    stored = await cursor.fetchone()
-                    if stored is None:
+                    sequence = await self.repo.find_message_sequence(
+                        event.session_id, event.message_id, event.timestamp, event.content_text
+                    )
+                    if sequence is None:
                         raise RuntimeError("无法定位已落库的消息")
                 media = self.channel is not None and self.channel._media_downloader is not None
-                await self._mark(row["id"], "media" if media else "done", stored["seq"])
+                await self._mark(row["id"], "media" if media else "done", sequence)
                 self._media_wake.set()
             except Exception as exc:
                 self.last_error = f"原始事件 {row['id']} 处理失败: {exc}"
@@ -176,13 +172,9 @@ class IngressRuntime:
                 if self.channel is not None and self.channel._media_downloader is not None:
                     await self.channel._media_downloader.enrich(event)
                     # 只补附件字段，保留 seq、原始正文和所有消费者游标。
-                    async with self._write_lock:
-                        conn = await self.repo._ensure_connection()
-                        await conn.execute("UPDATE messages SET content=? WHERE seq=?", (
-                            json.dumps([s.as_dict() for s in event.segments], ensure_ascii=False),
-                            row["message_seq"],
-                        ))
-                        await conn.commit()
+                    await self.repo.update_message_segments(
+                        row["message_seq"], [segment.as_dict() for segment in event.segments]
+                    )
                 await self._mark(row["id"], "done")
             except Exception as exc:
                 # 正文已经落库。保留原始事件供重启重试，避免单条坏附件空转。
@@ -265,7 +257,10 @@ def build_app(runtime=None):
                            "user_name": role_config.ASSISTANT_NAME, "timestamp": int(time.time()),
                            "content_text": "".join(s.to_text() for s in segments),
                            "content": [s.as_dict() for s in segments]}]}
-            result = await runtime.repo.store_message(MessageHandler.normalize_message_format(payload))
+            try:
+                result = await runtime.repo.store_message(MessageHandler.normalize_message_format(payload))
+            except (StorageError, ValidationError) as exc:
+                raise NetworkError("平台已返回发送回执，但本地记录写入失败，请先核对发送结果") from exc
             if not isinstance(result, dict) or result.get("status") != "success":
                 raise RuntimeError("已发送消息未成功落库，请先查日志，避免重复发送")
         return web.json_response({"message_id": message_id})

@@ -116,11 +116,6 @@ export interface TruckState {
   cycle_time: number | null
 }
 
-// 预设环境 (分块环境准备, 来自 tests/preset_env.py)
-// 分块: memory(记忆) / chat(消息记录) / amy；每块预设均为情景文件(含正式环境镜像)
-export type PresetBlock = 'memory' | 'chat' | 'amy'
-export type PresetBlocks = Record<PresetBlock, string[]>
-
 // ---- 浏览器 -> 服务端 ----
 
 export type ClientMessage =
@@ -189,14 +184,6 @@ export type ClientMessage =
       truck_id: string
       enabled: boolean
     }
-  // 测试模式切换 (进入/退出)
-  | { type: 'switch_test_mode'; enable: boolean }
-  // 预设环境 (分块环境准备: 查询 / 应用 / 抓取镜像 / 复制当前状态 / 删除预设)
-  | { type: 'list_presets' }
-  | { type: 'apply_env'; memory?: string; chat?: string; amy?: string }
-  | { type: 'capture_mirror'; block: PresetBlock; name: string }
-  | { type: 'copy_state'; block: PresetBlock; name: string }
-  | { type: 'delete_preset'; block: PresetBlock; name: string }
 
 // ---- 服务端 -> 浏览器 ----
 
@@ -303,20 +290,6 @@ export type ServerMessage =
       trucks: TruckState[]
       changed?: TruckState
     }
-  // 测试模式切换结果
-  | { type: 'test_mode_switched'; enable: boolean; ok: boolean }
-  // 预设环境
-  | { type: 'presets'; blocks: PresetBlocks }
-  | {
-      type: 'env_applied'
-      memory?: string
-      chat?: string
-      amy?: string
-      ok: boolean
-    }
-  | { type: 'mirror_captured'; block: PresetBlock; name: string; ok: boolean }
-  | { type: 'state_copied'; block: PresetBlock; name: string; ok: boolean }
-  | { type: 'preset_deleted'; block: PresetBlock; name: string; ok: boolean }
   // 警告 / 错误
   | {
       type: 'warning'

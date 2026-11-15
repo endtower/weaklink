@@ -5,7 +5,7 @@ import asyncio
 import os
 import sys
 
-from paths import ensure_cwd, log_root
+from paths import ensure_cwd, load_data_env, log_root
 
 
 def main():
@@ -17,6 +17,7 @@ def main():
     # Windows 下轮转所需的 rename 会因文件被占用而失败。此处兜底设置，
     # 冻结运行由管理服务通过 spawn 注入同一开关（见 core/supervisor.spawn）。
     os.environ.setdefault("LOG_GLOBAL_FILE", "0")
+    load_data_env()
     if sys.stdout is None:
         from utils.logger import rotate_log_file
 

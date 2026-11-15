@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Moon, Sunny, Connection, Document, Files, MagicStick, ChatDotRound, Aim, DataAnalysis, Monitor, Van } from '@element-plus/icons-vue'
+import { Moon, Sunny, Connection, Document, Files, MagicStick, ChatDotRound, DataAnalysis, Monitor, Van } from '@element-plus/icons-vue'
 import ChatWindow from './components/ChatWindow.vue'
 import InputArea from './components/InputArea.vue'
 import SessionList from './components/SessionList.vue'
@@ -16,7 +16,6 @@ import SessionChatDialog from './components/SessionChatDialog.vue'
 import TokenStatsDialog from './components/TokenStatsDialog.vue'
 import SystemPanelDialog from './components/SystemPanelDialog.vue'
 import IdentityBar from './components/IdentityBar.vue'
-import TestPresetDialog from './components/TestPresetDialog.vue'
 import { channel } from './api/channel'
 import { hostTheme } from './api/hostTheme'
 import { chat } from './stores/chat'
@@ -29,7 +28,6 @@ const eventListDialogVisible = ref(false)
 const contextOpen = ref(false)
 const amyOpen = ref(false)
 const sessionChatDialogVisible = ref(false)
-const testPresetDialogVisible = ref(false)
 const tokenStatsOpen = ref(false)
 const systemPanelOpen = ref(false)
 const coreReady = ref(false)
@@ -362,15 +360,6 @@ async function onSend(payload: { text: string; images: string[] }) {
             <el-icon :size="14"><Monitor /></el-icon>
             <span class="truck-toggle-label">系统</span>
           </button>
-          <button
-            v-if="chat.state.mode === 'test'"
-            class="truck-toggle-btn"
-            title="运行预设测试 (环境准备: 清空测试库并填入预设数据)"
-            @click="testPresetDialogVisible = true"
-          >
-            <el-icon :size="14"><Aim /></el-icon>
-            <span class="truck-toggle-label">测试</span>
-          </button>
           <div class="status-pill" :class="{ ok: chat.state.connected }">
             <span class="status-dot" />
             <span class="status-text">{{ chat.state.connected ? '已连接' : '未连接' }}</span>
@@ -425,6 +414,5 @@ async function onSend(payload: { text: string; images: string[] }) {
     <SessionChatDialog v-model:visible="sessionChatDialogVisible" />
     <TokenStatsDialog v-model:visible="tokenStatsOpen" />
     <SystemPanelDialog v-model:visible="systemPanelOpen" />
-    <TestPresetDialog v-model:visible="testPresetDialogVisible" />
   </div>
 </template>

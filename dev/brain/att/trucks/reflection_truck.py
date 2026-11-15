@@ -22,6 +22,7 @@ import traceback
 from typing import Optional
 
 from utils.logger import get_logger
+from utils.chain_context import CHAIN_OPERATION_ERRORS
 from .base_truck import BaseTruck
 
 logger = get_logger('reflection_truck', 'INFO')
@@ -82,6 +83,9 @@ class _BaseReflectionTruck(BaseTruck):
                     self._trigger_reason = reason
                     logger.info(f"满足反思触发条件: {reason}")
                     await self.remind_station()
+            except CHAIN_OPERATION_ERRORS as exc:
+                self._trigger_reason = ""
+                logger.warning("%s 本轮反思检查失败: %s", self.truck_id, exc)
             except Exception as e:
                 # 硬约定：关键环节失败不允许继续运行，直接崩溃阻断
                 # （CancelledError 继承自 BaseException，不会进入此处，stop() 不受影响）

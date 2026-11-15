@@ -12,7 +12,7 @@ from aiohttp import web
 
 from console_context import list_chains, read_chain_file
 from console_history import list_sessions, read_messages
-from paths import data_root, log_root, web_dist
+from paths import data_root, effective_data_env, log_root, web_dist
 from truck_settings_store import snapshot, update_settings
 
 COOKIE = "abyss_console_session"
@@ -75,9 +75,7 @@ class Console:
                                  headers={"Cache-Control": "no-store"})
 
     def upstream_headers(self):
-        import os
-        from dotenv import dotenv_values
-        token = os.environ.get("WEB_ACCESS_TOKEN") or dotenv_values(data_root() / ".env.dev").get("WEB_ACCESS_TOKEN")
+        token = effective_data_env().get("WEB_ACCESS_TOKEN")
         headers = {"X-Manager-Token": self.manager_token}
         if token:
             headers["Authorization"] = f"Bearer {token}"

@@ -14,9 +14,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
 
+from workspace_layout import test_root
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-TEST_DATA = tempfile.TemporaryDirectory(prefix="abyss_ingress_acceptance_")
+TEST_DATA = tempfile.TemporaryDirectory(prefix="abyss_ingress_acceptance_", dir=test_root())
 os.environ["ABYSS_DATA_DIR"] = TEST_DATA.name
 Path(TEST_DATA.name, ".env.dev").write_text("ONEBOT_ENABLED=true\n", encoding="utf-8")
 
@@ -53,7 +55,7 @@ async def until(predicate, timeout=8):
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="abyss_ingress_case_")
+        self.tmp = tempfile.TemporaryDirectory(prefix="abyss_ingress_case_", dir=test_root())
         self.env = patch.dict(os.environ, {"ABYSS_DATA_DIR": self.tmp.name})
         self.env.start()
         Path(self.tmp.name, ".env.dev").write_text("ONEBOT_ENABLED=true\n", encoding="utf-8")
@@ -135,6 +137,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.runtime.capture(malformed)
         await self.runtime.capture(event("2"))
         await until(lambda: self.count_is(1))
+        async def drained():
+            return (await self.runtime.status())["pending"] == {"failed": 1}
+        await until(drained)
         self.assertEqual((await self.runtime.status())["pending"], {"failed": 1})
 
     async def test_api_authentication_and_offline_send_failure(self):
@@ -199,7 +204,7 @@ class ManagementTests(unittest.TestCase):
         from core.supervisor import ProcSpec
         from unittest.mock import Mock
         import threading
-        with tempfile.TemporaryDirectory(prefix="abyss_ingress_manager_") as tmp:
+        with tempfile.TemporaryDirectory(prefix="abyss_ingress_manager_", dir=test_root()) as tmp:
             service = SimpleNamespace(epoch_lock=threading.Lock())
             ingress = Mock(ready=True)
             ingress.submit.return_value = {"ok": True}
@@ -214,10 +219,10 @@ class ManagementTests(unittest.TestCase):
             with patch.object(controller, "_refresh_spec"), patch("manager_core._port_alive", return_value=False), \
                     patch("manager_core._health_ok", return_value=True), patch("manager_core.spawn", return_value=process):
                 self.assertTrue(controller._cmd_start(0)["ok"])
-                ingress.submit.assert_called_once_with("start")
+                ingress.submit.assert_called_once_with("start", False)
                 process.poll.return_value = 0
                 self.assertTrue(controller._cmd_stop(0)["ok"])
-                ingress.submit.assert_called_once_with("start")
+                ingress.submit.assert_called_once_with("start", False)
 
     def test_stop_all_stops_ingress_last(self):
         from manager_core import SupervisorService
@@ -236,7 +241,7 @@ class ManagementTests(unittest.TestCase):
 
 class ProcessTests(unittest.IsolatedAsyncioTestCase):
     async def test_manager_manages_independent_ingress_and_stops_it_cleanly(self):
-        with tempfile.TemporaryDirectory(prefix="abyss_ingress_manager_process_") as temp:
+        with tempfile.TemporaryDirectory(prefix="abyss_ingress_manager_process_", dir=test_root()) as temp:
             manager_port, ingress_port, ob_port, web_port = free_port(), free_port(), free_port(), free_port()
             Path(temp, ".env.dev").write_text(
                 f"INGRESS_API_PORT={ingress_port}\nONEBOT_WS_PORT={ob_port}\nWEB_WS_PORT={web_port}\n", encoding="utf-8")
@@ -295,7 +300,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.to_thread(process.wait, 10)
 
     async def test_core_process_crash_and_restart_do_not_disconnect_ingress(self):
-        with tempfile.TemporaryDirectory(prefix="abyss_ingress_process_") as temp:
+        with tempfile.TemporaryDirectory(prefix="abyss_ingress_process_", dir=test_root()) as temp:
             port, ob_port, web_port, main_port = free_port(), free_port(), free_port(), free_port()
             Path(temp, ".env.dev").write_text(
                 f"INGRESS_API_PORT={port}\nONEBOT_WS_PORT={ob_port}\nWEB_WS_PORT={web_port}\n"
@@ -318,8 +323,17 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                         "CONVERSATION_API_KEY": "", "PERSONA_API_KEY": ""})
             output = open(Path(temp, "process.log"), "wb")
             package = os.getenv("ABYSS_ACCEPTANCE_PACKAGE")
-            ingress_command = [str(Path(package, "ingress.exe"))] if package else [sys.executable, "-u", str(ROOT / "ingress_service.py")]
-            core_command = ([str(Path(package, "core.exe"))] if package else [sys.executable, "-u", str(ROOT / "main.py")]) + ["--port", str(main_port)]
+            if package:
+                ingress_command = [str(Path(package, "ingress.exe"))]
+                core_command = [str(Path(package, "core.exe"))]
+            else:
+                from build_core_source import copy_python_sources
+
+                source = Path(temp, "source")
+                copy_python_sources(source)
+                ingress_command = [sys.executable, "-u", str(source / "ingress_service.py")]
+                core_command = [sys.executable, "-u", str(source / "main.py")]
+            core_command += ["--port", str(main_port)]
             ingress = subprocess.Popen(ingress_command,
                 cwd=ROOT, env=env, stdout=output, stderr=output,
                 creationflags=0x08000000 if os.name == "nt" else 0)
@@ -371,7 +385,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                             "title": "隔离效益验收", "final_evaluation": "无评价", "task_result": result, "failure_reason": reason,
                         }) as response:
                             self.assertEqual(response.status, 200, await response.text())
-                        expected += delta
+                        expected = min(100, max(0, expected + delta))
                         async with client.get(f"http://127.0.0.1:{web_port}/amy/state") as response:
                             state = (await response.json())["decision_feedback"]
                             self.assertEqual(state["competence_value"], expected)

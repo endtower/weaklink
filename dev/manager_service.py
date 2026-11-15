@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-from paths import app_root, backup_root, cache_root, data_root, ensure_cwd, external_root, log_root
+from paths import app_root, backup_root, cache_root, data_env_path, data_root, ensure_cwd, external_root, log_root
 
 app_root()
 ensure_cwd()
@@ -38,7 +38,7 @@ sys.path.insert(0, str(app_root()))
 from aiohttp import web                                     # noqa: E402
 import aiohttp                                               # noqa: E402
 from manager_core import SupervisorService, log_root        # noqa: E402
-from config.llm_settings import (DEFAULT_COMMON_URL, DEFAULT_COMMON_MODEL,
+from config_keys import (DEFAULT_COMMON_URL, DEFAULT_COMMON_MODEL,
                                  DEFAULT_EMBEDDING_MODEL, resolve_provider_label)  # noqa: E402
 from manager_updates import read_json                       # noqa: E402
 
@@ -272,7 +272,7 @@ _CONTROL_CHARS = frozenset(chr(i) for i in range(0x20)) | {"\x7f"}
 
 
 def _env_path() -> Path:
-    return data_root() / ".env.dev"
+    return data_env_path()
 
 
 def _read_env_map() -> dict[str, str]:

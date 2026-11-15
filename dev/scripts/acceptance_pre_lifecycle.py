@@ -22,6 +22,7 @@ from brain.att.proactive.proactive_session import ProactiveSession
 from brain.att.trucks.pre_truck import PreTruck
 from brain.att.trucks.base_truck import BaseTruck
 from brain.att.station import AttentionStation
+from utils.chain_context import ChainAbortedError, ensure_chain_active, reset_chain_context, set_chain_context
 
 
 def call(name, arguments="{}"):
@@ -137,12 +138,18 @@ class PreLifecycleAcceptance(unittest.IsolatedAsyncioTestCase):
 
         session = SimpleNamespace(start=block, stop=AsyncMock(), decision_result=None)
         await self.core.start()
-        with patch("brain.att.proactive.proactive_session.ProactiveSession", return_value=session):
-            feed = asyncio.create_task(self.core.feed_proactive_task(self.draft()))
-            await asyncio.wait_for(started.wait(), 2)
-            await self.core.stop()
-            with self.assertRaises(RuntimeError):
-                await asyncio.wait_for(feed, 2)
+        token = set_chain_context(self.draft()["chain_id"])
+        try:
+            with patch("brain.att.proactive.proactive_session.ProactiveSession", return_value=session):
+                feed = asyncio.create_task(self.core.feed_proactive_task(self.draft()))
+                await asyncio.wait_for(started.wait(), 2)
+                await self.core.stop()
+                with self.assertRaises(ChainAbortedError):
+                    await asyncio.wait_for(feed, 2)
+                with self.assertRaises(ChainAbortedError):
+                    ensure_chain_active()
+        finally:
+            reset_chain_context(token)
         await asyncio.wait_for(self.core.task_queue.join(), 2)
 
     async def test_stopped_or_dead_worker_rejects_feed(self):
