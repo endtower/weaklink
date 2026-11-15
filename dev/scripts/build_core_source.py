@@ -54,7 +54,7 @@ class DefaultInitializer:
 
 def copy_sources(destination: Path, private: bool = False):
     names = [p for directory in ("brain", "adapt", "core", "utils", "memory", "config")
-             for p in (ROOT / directory).rglob("*.py") if "tests" not in p.parts]
+             for p in (ROOT / directory).rglob("*.py") if "tests" not in p.relative_to(ROOT).parts]
     names += [ROOT / name for name in ("main.py", "ingress_service.py", "ingress_config.py", "paths.py",
                                       "config_keys.py", "truck_settings_store.py", "user_prompt_settings.py", "console_context.py", "console_history.py")]
     for src in names:

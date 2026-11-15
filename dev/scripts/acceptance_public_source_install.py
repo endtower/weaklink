@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from workspace_layout import test_root, CACHE, BUILDS
 import socket
 import subprocess
 import time
@@ -14,7 +13,9 @@ import uuid
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-ROOT = Path(__file__).resolve().parents[1]
+import psutil
+
+from workspace_layout import test_root
 
 
 def free_port():
@@ -28,8 +29,10 @@ def main():
     parser.add_argument("--release", type=Path, required=True)
     args = parser.parse_args()
     release = args.release.resolve()
+    versions = json.loads((release / "build-summary.json").read_text(encoding="utf-8"))["versions"]
     fixture = test_root() / ("public-source-install-" + uuid.uuid4().hex)
     program, data = fixture / "program", fixture / "data"
+    installed_launcher = program / "AbyssLauncher.exe"
     (data / "manager").mkdir(parents=True)
     manager_port, ingress_port, web_port, main_port = [free_port() for _ in range(4)]
     (data / ".env.dev").write_text(f"ONEBOT_ENABLED=false\nBRIDGE_ENABLED=false\nINGRESS_API_PORT={ingress_port}\nWEB_WS_PORT={web_port}\nMAIN_PORT={main_port}\n", encoding="utf-8")
@@ -43,7 +46,7 @@ def main():
     env.pop("ABYSS_RUN_MODE", None)
     env.update({"ABYSS_DATA_DIR": str(data), "ABYSS_INSTALL_DIR": str(program), "ABYSS_MANAGER_PORT": str(manager_port),
                 "ABYSS_LAUNCHER_MUTEX": "PublicSourceAcceptance_" + uuid.uuid4().hex,
-                "ABYSS_UPDATES_SNAPSHOT": str(fixture / "first-install.png"), "ABYSS_UPDATES_EXIT_AFTER_SNAPSHOT": "1"})
+                "DOTNET_BUNDLE_EXTRACT_BASE_DIR": str(fixture / "dotnet-bundle")})
     env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
     startup = subprocess.STARTUPINFO(); startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW; startup.wShowWindow = subprocess.SW_HIDE
     launcher = subprocess.Popen([str(release / "download/AbyssLauncher.exe")], cwd=fixture, env=env, startupinfo=startup)
@@ -66,6 +69,8 @@ def main():
         deadline = time.monotonic() + timeout
         last = None
         while time.monotonic() < deadline:
+            if launcher.poll() not in (None, 0):
+                raise AssertionError(f"Launcher exited with {launcher.returncode:#x}; fixture={fixture}")
             try:
                 value = predicate()
                 if value:
@@ -85,17 +90,20 @@ def main():
 
     try:
         info = until(lambda: call("/v1/info"), 100)
-        assert info["version"] == json.loads((ROOT / "component_versions.json").read_text())["manager"], info
+        assert info["version"] == versions["manager"], info
         assert (program / "components/manager/source/manager_service.py").exists()
         assert not (program / "manager.exe").exists() and not (program / "updater/AbyssUpdater.exe").exists()
-        assert (program / "AbyssLauncher.exe").exists(), "Download entry did not install its updatable launcher"
+        assert installed_launcher.exists(), "Download entry did not install its updatable launcher"
         status = call("/v1/updates")
         assert next(x for x in status["components"] if x["component"] == "core")["current"] == "未安装"
         assert not (program / "components/core").exists()
-        until(lambda: (fixture / "first-install.png").exists(), 60)
-        launcher.wait(20)
         print("PASS single EXE bootstraps manager without system Python or automatic Core download", flush=True)
-        version = json.loads((release / "release-summary.json").read_text())["versions"]["core"]
+        manager_archive = release / "packages" / f"manager-{versions['manager']}.zip"
+        manager_stage = call("/v1/updates/import", {"component": "manager", "path": str(manager_archive)})
+        manager_row = next(x for x in manager_stage["components"] if x["component"] == "manager")
+        assert manager_row["staged_version"] == versions["manager"], manager_row
+        print("PASS standalone management service update package stages with its bundled runtime", flush=True)
+        version = versions["core"]
         archive = release / "packages" / f"core-{version}.zip"
         call("/v1/updates/import", {"component": "core", "path": str(archive)})
         denied = call("/v1/updates/apply", {"component": "core", "version": version}, allow_error=True)
@@ -114,7 +122,6 @@ def main():
         current = targets()
         assert current["core"]["ready"] and current["ingress"]["ready"], current
         # 核对真正启动的是组件中的解释器，不能偷偷退回本机 Python。
-        import psutil
         assert Path(psutil.Process(current["core"]["pid"]).exe()).resolve() == (bundle / "runtime/python.exe").resolve()
         assert Path(psutil.Process(current["ingress"]["pid"]).exe()).resolve() == (bundle / "runtime/python.exe").resolve()
         with urlopen(Request(base + "/console/trucks", headers={"X-Manager-Token": (data / "manager/service_token.txt").read_text().strip()}), timeout=20) as response:
@@ -158,7 +165,8 @@ def main():
         job_path.write_text(json.dumps(job), encoding="utf-8")
         helper = release / "download/AbyssLauncher.exe"
         for flags in (("--files-only",), ("--rollback", "--files-only")):
-            subprocess.run([str(helper), "--update-job", str(job_path), *flags], check=True, timeout=60, creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.run([str(helper), "--update-job", str(job_path), *flags], env=env,
+                           check=True, timeout=60, creationflags=subprocess.CREATE_NO_WINDOW)
         assert (target / "core.exe").read_bytes() == b"old"
         print("PASS external updater reports successful program rollback correctly", flush=True)
         print(f"PASS public installation workflow; fixture={fixture}", flush=True)
@@ -168,6 +176,14 @@ def main():
         if launcher.poll() is None:
             launcher.terminate()
             launcher.wait(10)
+        for process in psutil.process_iter(["exe"]):
+            image = process.info["exe"]
+            if image and Path(image).is_relative_to(fixture):
+                try:
+                    process.terminate()
+                    process.wait(10)
+                except psutil.NoSuchProcess:
+                    pass
 
 
 if __name__ == "__main__":

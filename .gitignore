@@ -6,6 +6,10 @@
 /backups/
 /private/
 
+# Local credentials, including the old workspace layout
+.env.dev
+service_token.txt
+
 # Local tooling/editor state
 /.codex/
 /.screenshots/

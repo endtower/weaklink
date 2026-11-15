@@ -1,10 +1,8 @@
 # 弱链接 / WeakLink
 
-双击 **[启动弱链接.cmd](启动弱链接.cmd)**，或打开 `app/AbyssLauncher.exe`。启动器统一管理 Core、消息接入和 SnowLuma，并提供各项目的管理页面。
+在 [最新发布](https://github.com/endtower/weaklink/releases/latest) 下载 **AbyssLauncher.exe** 并双击运行。启动器统一管理 Core、消息接入和 SnowLuma。让 AI 帮你安装时，请它先读 [安装指南](dev/docs/AGENT-INSTALL.md)。
 
-> **用户下载：[Releases](https://github.com/endtower/weaklink/releases/latest)。**
-> 让 AI 帮你装：把你的助手叫来，让它先读 [dev/docs/AGENT-INSTALL.md](dev/docs/AGENT-INSTALL.md) 再动手。
-> 本仓库同时是源码工程，源码在 [`dev/`](dev/) 下，按组件分目录。
+已经在本地工作区装好程序时，可以双击根目录的 `启动弱链接.cmd` 打开本地运行版。
 
 ## 源码在哪
 
@@ -52,16 +50,14 @@ Core、SnowLuma、启动器各自有独立的版本号和更新清单，**互不
 | `backups/` | 更新、源码、历史数据与本次目录整理的备份 |
 | `private/` | 私人资料、历史交接、参考图、实验项目和旧构建工具 |
 
-前六个以外的「唯一打包的自有业务程序」是 `app/AbyssLauncher.exe`；管理服务、Core 和消息接入以源码运行。Python、Node 等上游运行环境随程序提供。
+`app/AbyssLauncher.exe` 是打包的桌面入口。管理服务、Core 和消息接入以源码运行，程序随包提供所需的运行环境。
 
 > `app / data / external / cache / backups / private` 都在 `.gitignore` 里，不进仓库。
 
 ## 历史
 
 项目原名 N_Touch（界面叫 Abyss），2026-11 更名为「弱链接 / WeakLink」。
-改名前的最后状态保存在 tag [
--touch-final](https://github.com/endtower/weaklink/releases/tag/n-touch-final) 对应的提交里，
-git checkout n-touch-final 即可回看。
+改名前的最后状态保存在 [`n-touch-final` 标签](https://github.com/endtower/weaklink/tree/n-touch-final)。
 
 ## 给接手的 Agent
 
@@ -70,8 +66,8 @@ git checkout n-touch-final 即可回看。
 开发和改运行版源码：先读 [AGENTS.md](AGENTS.md)。通过 `GET /v1/storage` 确认真实运行位置；管理服务未启动时，检查 `app/abyss-data-dir.txt`、`app/abyss-storage-dir.txt` 和组件目录。
 
 - 修改用户正在使用的功能：操作 `app/components/<组件>/source/`，先备份，修改后重启对应服务。
-- 开发公开版本与构建安装包：操作 `dev/`，入口见 [dev/README.md](dev/README.md)。开发源码不会自动覆盖运行源码。
+- 开发公开版本与构建安装包：操作 `dev/`，入口见 [开发与发布指南](dev/README.md)。本机运行版的通用修复需回填 `dev/` 并提交 Git；本机定制留在安装实例。
 - 用户数据始终归 `data/`；SnowLuma 安装在 `external/snowluma/`，不接管其内部存储。
 - 本地源码修改保护继续有效；不能通过重置安装基线绕过保护。
 
-完整存储规则见 [dev/docs/STORAGE.md](dev/docs/STORAGE.md)。本次整理不修改数据库内容、人格、嵌入模型或第三方内部配置。
+完整存储规则见 [存储说明](dev/docs/STORAGE.md)。

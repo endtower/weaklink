@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""manager_service —— Abyss 独立常驻管理服务（无界面入口，打包为 manager.exe）
+"""manager_service —— Abyss 独立常驻管理服务（无界面入口）
 
 唯一进程控制者：WPF 窗口、CLI、Core 网页系统面板都通过本服务的 /v1 接口
 提交命令。不导入 SystemCore/业务代码，不初始化业务数据库/人格/LLM；
@@ -40,8 +40,12 @@ import aiohttp                                               # noqa: E402
 from manager_core import SupervisorService, log_root        # noqa: E402
 from config.llm_settings import (DEFAULT_COMMON_URL, DEFAULT_COMMON_MODEL,
                                  DEFAULT_EMBEDDING_MODEL, resolve_provider_label)  # noqa: E402
+from manager_updates import read_json                       # noqa: E402
 
-SERVICE_VERSION = "0.11.0"
+SERVICE_VERSION = (
+    read_json(app_root() / "components/manager/release.json", {}).get("version")
+    or read_json(app_root() / "component_versions.json", {}).get("manager", "0.11.0")
+)
 API_PORT = 49990
 _TOKEN_FILE = data_root() / "manager" / "service_token.txt"
 

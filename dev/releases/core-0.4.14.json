@@ -1,0 +1,8 @@
+{
+  "format": "source-v1",
+  "notes": "人格页的情绪词配置改为在同一页面展开。此版本继续由 Core 和管理服务各自携带匹配的 Python 运行环境，支持单 EXE 首次安装和现有安装的组件更新。",
+  "breaking_changes": [],
+  "data_policy": "compatible",
+  "migration_notes": "无需迁移数据库；安装和回退只替换程序文件。",
+  "requires": { "manager": "0.11.0", "launcher": "0.8.0" }
+}

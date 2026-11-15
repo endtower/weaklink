@@ -12,24 +12,45 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from xml.etree import ElementTree
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from build_core_source import copy_runtime, copy_sources
 from package_component import package
-from update_policy import allowed_file
+from update_policy import allowed_file, version_key
 from workspace_layout import TOOLS
+
+
+PUBLIC_COMPONENTS = ("core", "manager", "launcher")
+
+
+def validate_release_versions(versions, previous_releases):
+    launcher_project = ElementTree.parse(ROOT / "launcher/AbyssLauncher.csproj")
+    if launcher_project.findtext("./PropertyGroup/Version") != versions["launcher"]:
+        raise ValueError("启动器项目版本与 component_versions.json 不一致")
+    for component in PUBLIC_COMPONENTS:
+        version_key(versions[component])
+    if previous_releases is None:
+        return
+    for manifest in previous_releases.glob("*.json"):
+        previous = json.loads(manifest.read_text(encoding="utf-8"))
+        component = previous.get("component")
+        if component in PUBLIC_COMPONENTS and version_key(versions[component]) <= version_key(previous["version"]):
+            raise ValueError(f"{component} {versions[component]} 必须高于已发布的 {previous['version']}，避免同版本生成不同的包")
 
 
 def build(output: Path, private=False, feed_base_url="", package_base_url="", runtime=None, metadata_path=None, previous_releases=None):
     output = output.resolve()
     if output.exists():
         raise ValueError("输出必须为新目录，避免旧二进制或个人文件混入")
-    output.mkdir(parents=True)
-    app = output / "app"
     versions = json.loads((ROOT / "component_versions.json").read_text(encoding="utf-8"))
     metadata = json.loads((metadata_path or ROOT / f"releases/core-{versions['core']}.json").read_text(encoding="utf-8"))
+    if not private:
+        validate_release_versions(versions, previous_releases)
+    output.mkdir(parents=True)
+    app = output / "app"
     core = app / "components/core"
     core.mkdir(parents=True)
     copy_sources(core / "source", private=private)
@@ -53,7 +74,7 @@ def build(output: Path, private=False, feed_base_url="", package_base_url="", ru
     (manager / "release.json").write_text(json.dumps({"version": versions["manager"], "format": "source-manager-v1"}), encoding="utf-8")
     shutil.copy2(ROOT / "component_versions.json", app / "component_versions.json")
     defaults = {"auto_check": not private, "core_distribution": "source-v1", "manager_distribution": "source-manager-v1", "sources": {
-        name: feed_base_url.rstrip("/") + f"/{name}-latest.json" for name in ("core", "manager", "launcher") if feed_base_url}}
+        name: feed_base_url.rstrip("/") + f"/{name}-latest.json" for name in PUBLIC_COMPONENTS if feed_base_url}}
     (app / "update_defaults.json").write_text(json.dumps(defaults, indent=2), encoding="utf-8")
     (app / "abyss-data-dir.txt").write_text("../data", encoding="utf-8")
     (app / "abyss-storage-dir.txt").write_text("..", encoding="utf-8")
@@ -82,19 +103,17 @@ def build(output: Path, private=False, feed_base_url="", package_base_url="", ru
     subprocess.run(command, check=True, cwd=ROOT)
     shutil.copy2(output / "launcher-build/AbyssLauncher.exe", app / "AbyssLauncher.exe")
     if not private:
+        # Manager 0.11.0 also checks for manager_internal/ when importing a source package.
+        legacy_manager = app / "manager_internal"
+        legacy_manager.mkdir()
+        (legacy_manager / "source-layout.txt").write_text("components/manager/runtime\n", encoding="utf-8")
         if previous_releases:
             (output / "packages").mkdir(exist_ok=True)
             for path in previous_releases.glob("*.json"):
                 if not path.name.endswith(("-latest.json", "-versions.json")):
                     shutil.copy2(path, output / "packages" / path.name)
-        for name in ("core", "manager", "launcher"):
+        for name in PUBLIC_COMPONENTS:
             package(name, versions[name], app, output / "packages", package_base_url, metadata=metadata if name == "core" else None)
-        # 运行库独立发版（2026-11-13）：源码包已不含 runtime/，这里单独产出两个运行库包。
-        # 版本取 component_versions.json 里的 <name>-runtime，缺省回落到对应源码版本。
-        for parent in ("core", "manager"):
-            runtime_component = f"{parent}-runtime"
-            runtime_version = versions.get(runtime_component) or versions[parent]
-            package(runtime_component, runtime_version, app, output / "packages", package_base_url)
         (output / "download").mkdir()
         shutil.copy2(app / "AbyssLauncher.exe", output / "download/AbyssLauncher.exe")
     summary = {"app": str(app), "versions": versions, "private": private, "packaged_business_executables": ["AbyssLauncher.exe"]}

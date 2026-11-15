@@ -42,4 +42,10 @@ python scripts/acceptance_source_layout.py --app ../app
 
 一键启动的源码脚本、链路等待、跳过与恢复规则，以及外部 AI 的配置接口见 [docs/STARTUP.md](docs/STARTUP.md)。`startup_plan.py` 是供 AI 直接修改的正式启动入口；打开启动器本身不执行业务启动。
 
-仓库尚未因这次整理而发布。私人目录和本机运行区被忽略；公开前仍须单独审查 Git 历史与公共默认内容。
+## 公开发布
+
+将运行版中的通用修复回填到本目录并提交 Git；仅本机需要的定制留在安装实例。发版从要发布的 Git 提交构建，避免把正在试验的本地改动混进安装包。
+
+1. 更新 `component_versions.json`、启动器项目中的版本号，以及对应的 `releases/core-<版本>.json`。当前公开构建会重做 Core、管理服务和启动器三个包，它们都需要新版本号。
+2. 为该提交推送与 Core 版本匹配的标签，例如 `v0.4.14`。也可在 GitHub Actions 手动运行 Release，选中要发版的分支或标签。
+3. Release 流程读取已发布的版本清单，拒绝重复版本，构建产物后在隔离目录验收单 EXE 首次安装、管理服务包导入和 Core 安装及更新。只有验收通过才创建 GitHub Release。发布后补改产物时发布新版本。

@@ -14,8 +14,9 @@
 - 修改前先通过 `GET /v1/storage` 确认实际源码和数据位置。`dev` 是开发源，修改仓库不会自动替换已经安装的运行源码。
 - 运行中的 Core 源码在 `app\components\core\source`，管理服务源码在 `app\components\manager\source`。
 - 可先调用 `POST /v1/updates/source-backup`（component 为 core 或 manager）保留当前代码，再直接修改。后端修改后重启对应服务；前端修改后由 Agent 构建对应组件的 `web_frontend`。
+- 本机运行版的通用修复应同步回 `dev` 并提交 Git，以便后续版本包含；仅本机需要的定制留在安装实例。
 - 历史数据已迁入工作区 `data`。SnowLuma 原安装位置由 `data\manager\installations.json` 登记，内部存储遵循上游。
-- 一键启动框架：实际脚本为 `app/components/manager/source/startup_plan.py`，执行器为同目录 `startup_workflow.py`；开发副本在 `dev`。外部 AI 直接编辑脚本，说明见 `dev/docs/STARTUP.md`（随包副本 `app/components/manager/source/docs/STARTUP.md`）。管理接口为 `GET /v1/startup` 和 `POST /v1/startup/{start|continue|retry|skip|cancel|enable|stop|reload}`，沿用管理令牌。打开 EXE 只展示界面，点击「一键启动」才执行已勾选链路；Pi 和 QQ 独立，失败可跳过或单独继续。改脚本可暂停流程后调用 reload，无须重新打包 EXE；改框架/进程控制仍需重启管理服务。
+- 一键启动框架：`GET /v1/storage` 的 `startup_script` 是当前取用的脚本。优先加载用户的 `data/manager/startup_plan.py`，缺省时使用随包的 `app/components/manager/source/startup_plan.py`。本机定制写入用户脚本，公共样板和执行器在 `dev` 维护。管理接口为 `GET /v1/startup` 和 `POST /v1/startup/{start|continue|retry|skip|cancel|enable|stop|reload}`，沿用管理令牌。点击「一键启动」才执行已勾选链路。改脚本可暂停流程后调用 reload，改框架或进程控制要重启管理服务。详见 [一键启动说明](dev/docs/STARTUP.md)。
 - **启动器界面也是可配置的用户数据**：`data\launcher\ui.json` 控制主题、点 × 的行为，以及每个组件行是否显示、叫什么名字（`rows` → `visible` / `title`）。改完重开启动器生效，不需要重新编译 EXE。同目录 `README.md` 是给用户和 Agent 的说明，由启动器首次运行时自动放出。想看某个组件行消失后界面什么样，改这个文件即可 —— 不用动源码。
 - **日志页同样可配置**：`data\launcher\logs.json` 决定日志页左边有哪些来源、每个来源读哪些文件（`sources` → `id` / `title` / `row` / `streams`）。想给用户自己另起的程序加一格日志，在这个文件里加一条即可，不用编译。日志来源的显隐跟着 `row` 指定的组件行走。同目录 `README.md` 里有完整字段说明。
 
@@ -322,5 +323,5 @@ packages\                    ← 整个文件夹：*.zip 与同名 *.json 必须
 
 - 源码开发模式：先进入 `dev`，再运行 `python manager.py` / `python main.py --dev`；仓库模式永远不会被组件安装覆盖。
 - 公开发布构建：在 `dev` 执行 `python scripts/build_public_release.py --output ../cache/builds/<新目录> --feed-base-url ... --package-base-url ... --metadata releases/core-<版本>.json`，产物是 `download\AbyssLauncher.exe` + `packages\`（ZIP 与同名 JSON 必须成对，先传包后传清单）。
-- CI 发布：改 `dev/component_versions.json` 与 `dev/releases/core-*.json`，推 `v*` 标签，`.github/workflows/release.yml` 构建并上传 Release。
+- CI 发布规则见 [开发与发布指南](dev/README.md#公开发布)。推送与 Core 版本匹配的标签后，Release 工作流先构建并验收首次安装，再上传发布产物。
 - 组件版本、更新源和安装边界的细节见 `dev/updater/README.md`；QQ 接入的完整参数与排错见本文件第 7 节与 `dev/config/adapt_settings.py` 注释。
